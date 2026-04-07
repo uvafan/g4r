@@ -58,6 +58,7 @@ export function createInitialState(
     players,
     deck: deck.slice(deckIdx),
     pool: [],
+    pendingPool: [],
     sites,
     genericSupply,
     jackPile: playerCount + 1,
@@ -174,6 +175,8 @@ function advanceLeader(state: GameState): GameState {
   const nextLeader = (state.leadPlayerIdx + 1) % state.playerCount;
   return {
     ...state,
+    pool: [...state.pool, ...state.pendingPool],
+    pendingPool: [],
     leadPlayerIdx: nextLeader,
     phase: { type: 'lead', leaderId: nextLeader },
   };
@@ -305,7 +308,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       if (isJackCard(card)) {
         newState = { ...newState, jackPile: newState.jackPile + 1 };
       } else {
-        newState = { ...newState, pool: [...newState.pool, card] };
+        newState = { ...newState, pendingPool: [...newState.pendingPool, card] };
       }
 
       const followers = getFollowerIds(state, phase.leaderId);
@@ -354,7 +357,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       if (isJackCard(card)) {
         newState = { ...newState, jackPile: newState.jackPile + 1 };
       } else {
-        newState = { ...newState, pool: [...newState.pool, card] };
+        newState = { ...newState, pendingPool: [...newState.pendingPool, card] };
       }
 
       // Add follower to actors list

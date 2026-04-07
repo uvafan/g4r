@@ -64,6 +64,7 @@ export interface GameState {
   players: Player[];
   deck: Card[];
   pool: Card[];
+  pendingPool: Card[];
   sites: Sites;
   genericSupply: GenericSupply;
   jackPile: number;

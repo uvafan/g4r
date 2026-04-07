@@ -11,6 +11,7 @@ const defaultState: GameState = {
   players: [],
   deck: [],
   pool: [],
+  pendingPool: [],
   sites: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 0, Marble: 0 },
   genericSupply: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 0, Marble: 0 },
   jackPile: 0,

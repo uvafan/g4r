@@ -115,7 +115,8 @@ describe('Lead and Follow', () => {
     });
 
     expect(newState.players[0]!.hand).toHaveLength(handBefore - 1);
-    expect(newState.pool.some(c => c.uid === concreteCardUid)).toBe(true);
+    expect(newState.pendingPool.some(c => c.uid === concreteCardUid)).toBe(true);
+    expect(newState.pool).toHaveLength(0);
     expect(newState.phase.type).toBe('follow');
     if (newState.phase.type === 'follow') {
       expect(newState.phase.ledRole).toBe('Architect');
@@ -162,6 +163,36 @@ describe('Lead and Follow', () => {
     if (newState.phase.type === 'action') {
       expect(newState.phase.actors).toEqual([0]); // Only leader
     }
+  });
+
+  it('cards do not enter pool until after all actions resolve', () => {
+    const { state, concreteCardUid } = getStateWithConcreteCard();
+
+    // Lead with concrete card
+    let s = gameReducer(state, {
+      type: 'LEAD_ROLE',
+      role: 'Architect',
+      cardUid: concreteCardUid,
+    });
+
+    // Card should be in pendingPool, not pool
+    expect(s.pendingPool).toHaveLength(1);
+    expect(s.pool).toHaveLength(0);
+
+    // Follower thinks → enters action phase
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(s.phase.type).toBe('action');
+    // Still not in pool during action phase
+    expect(s.pool).toHaveLength(0);
+    expect(s.pendingPool).toHaveLength(1);
+
+    // Skip action → turn ends, advances leader
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    expect(s.phase.type).toBe('lead');
+    // Now the card should be in pool
+    expect(s.pool).toHaveLength(1);
+    expect(s.pool.some(c => c.uid === concreteCardUid)).toBe(true);
+    expect(s.pendingPool).toHaveLength(0);
   });
 });
 
@@ -780,7 +811,7 @@ describe('Generic cards as materials and foundations', () => {
 
     state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Architect', cardUid: genericConcrete.uid });
     expect(state.phase.type).toBe('follow');
-    expect(state.pool.some(c => c.uid === genericConcrete.uid)).toBe(true);
+    expect(state.pendingPool.some(c => c.uid === genericConcrete.uid)).toBe(true);
   });
 
   it('generic card can follow a role', () => {
