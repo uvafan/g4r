@@ -612,7 +612,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
         if (def.material === 'Rubble') {
           result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
         }
-        if (def.material === 'Marble') {
+        if (def.material === 'Stone') {
           result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
         }
       }

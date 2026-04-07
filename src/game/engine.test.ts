@@ -1368,14 +1368,14 @@ describe('Merchant action', () => {
     expect(state.phase.type).toBe('lead');
   });
 
-  it('leading Merchant requires a Marble card', () => {
+  it('leading Merchant requires a Stone card', () => {
     const rng = seededRng(42);
     const state = createInitialState(2, ['A', 'B'], rng);
     const actions = getAvailableActions(state);
     for (const opt of actions.leadOptions) {
       if (opt.role === 'Merchant') {
         const card = state.players[0]!.hand.find(c => c.uid === opt.cardUid)!;
-        expect(getCardDef(card).material).toBe('Marble');
+        expect(getCardDef(card).material).toBe('Stone');
       }
     }
   });
