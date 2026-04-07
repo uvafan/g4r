@@ -27,7 +27,7 @@ function migrateState(state: GameState): GameState {
   if (needsMigration) {
     return {
       ...state,
-      players: state.players.map(p => ('stockpile' in p) ? p : { ...p, stockpile: [] }),
+      players: state.players.map((p: any) => ('stockpile' in p) ? p : { ...p, stockpile: [] }) as GameState['players'],
     };
   }
   return state;
