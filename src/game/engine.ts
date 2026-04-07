@@ -496,6 +496,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
 
+      // Vault capacity is limited by influence
+      if (player.vault.length >= player.influence) return state;
+
       const stockpileIdx = player.stockpile.findIndex(
         c => getCardDef(c).material === action.material
       );
@@ -688,11 +691,14 @@ export function getAvailableActions(state: GameState): AvailableActions {
     }
 
     if (phase.ledRole === 'Merchant') {
-      const stockpileMaterialSet = new Set<MaterialType>();
-      for (const card of player.stockpile) {
-        stockpileMaterialSet.add(getCardDef(card).material);
+      // Vault capacity is limited by influence
+      if (player.vault.length < player.influence) {
+        const stockpileMaterialSet = new Set<MaterialType>();
+        for (const card of player.stockpile) {
+          stockpileMaterialSet.add(getCardDef(card).material);
+        }
+        result.merchantOptions = [...stockpileMaterialSet];
       }
-      result.merchantOptions = [...stockpileMaterialSet];
     }
   }
 

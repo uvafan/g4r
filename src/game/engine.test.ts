@@ -1299,7 +1299,7 @@ describe('Merchant action', () => {
       ...state,
       nextUid: state.nextUid + 1,
       players: state.players.map((p, i) =>
-        i === 0 ? { ...p, stockpile: [brickStockpile] } : p
+        i === 0 ? { ...p, influence: 1, stockpile: [brickStockpile] } : p
       ),
       phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
     };
@@ -1358,7 +1358,7 @@ describe('Merchant action', () => {
       ...state,
       nextUid: state.nextUid + 1,
       players: state.players.map((p, i) =>
-        i === 0 ? { ...p, stockpile: [brickStockpile] } : p
+        i === 0 ? { ...p, influence: 1, stockpile: [brickStockpile] } : p
       ),
       phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
     };
@@ -1390,7 +1390,7 @@ describe('Merchant action', () => {
       ...state,
       nextUid: state.nextUid + 2,
       players: state.players.map((p, i) =>
-        i === 0 ? { ...p, stockpile: [brickStockpile, woodStockpile] } : p
+        i === 0 ? { ...p, influence: 5, stockpile: [brickStockpile, woodStockpile] } : p
       ),
       phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
     };
@@ -1434,5 +1434,88 @@ describe('Merchant action', () => {
     const actions = getAvailableActions(state);
     const jackLeadOptions = actions.leadOptions.filter(o => o.cardUid === jack.uid);
     expect(jackLeadOptions.some(o => o.role === 'Merchant')).toBe(true);
+  });
+
+  it('vault capacity is limited by influence', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brick1: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const brick2: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Brick') };
+    const vaultCard: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 3,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1, vault: [vaultCard], stockpile: [brick1, brick2] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    // Vault is full (1/1), should reject
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+    expect(state.players[0]!.vault).toHaveLength(1);
+    expect(state.players[0]!.stockpile).toHaveLength(2);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('allows vault addition when under capacity', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brick: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 2, stockpile: [brick] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    // Vault is 0/2, should allow
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+    expect(state.players[0]!.vault).toHaveLength(1);
+    expect(state.players[0]!.stockpile).toHaveLength(0);
+  });
+
+  it('rejects vault addition with 0 influence', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brick: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 0, stockpile: [brick] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+    expect(state.players[0]!.vault).toHaveLength(0);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('merchantOptions is empty when vault is at capacity', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brick: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const vaultCard: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1, vault: [vaultCard], stockpile: [brick] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.merchantOptions).toHaveLength(0);
   });
 });

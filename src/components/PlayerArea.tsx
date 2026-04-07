@@ -17,9 +17,9 @@ export function PlayerArea({ player, isActive, selectedBuildingIndex, highlighte
         <strong>{player.name}</strong>
         <span>Influence: {player.influence} | Hand: {player.hand.length}</span>
       </div>
-      {player.vault.length > 0 && (
+      {(player.vault.length > 0 || player.influence > 0) && (
         <div className="stockpile-row">
-          <span className="stockpile-label">Vault:</span>
+          <span className="stockpile-label">Vault ({player.vault.length}/{player.influence}):</span>
           {(() => {
             const counts: Partial<Record<MaterialType, number>> = {};
             for (const card of player.vault) {
