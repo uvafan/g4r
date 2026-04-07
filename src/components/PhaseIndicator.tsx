@@ -21,6 +21,9 @@ export function PhaseIndicator({ state }: PhaseIndicatorProps) {
     case 'action':
       phaseText = `Action Phase — ${phase.ledRole} — ${activeName}'s turn`;
       break;
+    case 'legionary_demand':
+      phaseText = `Legionary Demand — ${activeName} must give ${phase.revealedMaterial}`;
+      break;
     case 'setup':
       phaseText = 'Setup';
       break;

@@ -214,6 +214,14 @@ function advanceActor(state: GameState, phase: Phase & { type: 'action' }): Game
   };
 }
 
+export function getNeighborIds(playerId: number, playerCount: number): number[] {
+  if (playerCount <= 1) return [];
+  const left = (playerId - 1 + playerCount) % playerCount;
+  const right = (playerId + 1) % playerCount;
+  if (left === right) return [left]; // 2-player: same neighbor
+  return [left, right];
+}
+
 function canStartBuildingOfMaterial(player: Player, material: MaterialType, sites: Sites): boolean {
   // Must have an available site
   if (sites[material] <= 0) return false;
@@ -518,6 +526,94 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return advanceActor(newState, phase);
     }
 
+    case 'LEGIONARY_REVEAL': {
+      const { phase } = state;
+      if (phase.type !== 'action' || phase.ledRole !== 'Legionary') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const card = player.hand.find(c => c.uid === action.cardUid);
+      if (!card || isJackCard(card)) return state;
+
+      const revealedMaterial = getCardDef(card).material;
+
+      // Take one matching card from pool to stockpile
+      let newState = { ...state };
+      const poolIdx = newState.pool.findIndex(c => getCardDef(c).material === revealedMaterial);
+      if (poolIdx !== -1) {
+        const poolCard = newState.pool[poolIdx]!;
+        newState = {
+          ...newState,
+          pool: [...newState.pool.slice(0, poolIdx), ...newState.pool.slice(poolIdx + 1)],
+        };
+        newState = updatePlayer(newState, actorId, {
+          stockpile: [...newState.players[actorId]!.stockpile, poolCard],
+        });
+      }
+
+      // Find neighbors who have matching material in hand
+      const neighbors = getNeighborIds(actorId, state.playerCount);
+      const demandees = neighbors.filter(nId => {
+        const neighbor = newState.players[nId]!;
+        return neighbor.hand.some(c => !isJackCard(c) && getCardDef(c).material === revealedMaterial);
+      });
+
+      if (demandees.length === 0) {
+        // No neighbors to demand from, advance actor
+        return advanceActor(newState, phase);
+      }
+
+      // Enter legionary_demand phase
+      return {
+        ...newState,
+        phase: {
+          type: 'legionary_demand',
+          revealedMaterial,
+          demandees,
+          currentDemandeeIndex: 0,
+          actionActors: phase.actors,
+          actionCurrentActorIndex: phase.currentActorIndex,
+        },
+      };
+    }
+
+    case 'LEGIONARY_GIVE': {
+      const { phase } = state;
+      if (phase.type !== 'legionary_demand') return state;
+
+      const demandeeId = phase.demandees[phase.currentDemandeeIndex]!;
+      const demandee = state.players[demandeeId]!;
+      const { card, newHand } = removeCardFromHand(demandee, action.cardUid);
+
+      // Validate: card must match demanded material and not be a jack
+      if (isJackCard(card) || getCardDef(card).material !== phase.revealedMaterial) return state;
+
+      // Card goes to the legionary actor's stockpile
+      const actorId = phase.actionActors[phase.actionCurrentActorIndex]!;
+      let newState = updatePlayer(state, demandeeId, { hand: newHand });
+      newState = updatePlayer(newState, actorId, {
+        stockpile: [...newState.players[actorId]!.stockpile, card],
+      });
+
+      // Advance to next demandee or back to action phase
+      const nextDemandeeIdx = phase.currentDemandeeIndex + 1;
+      if (nextDemandeeIdx >= phase.demandees.length) {
+        // Return to action phase and advance actor
+        const actionPhase: Phase & { type: 'action' } = {
+          type: 'action',
+          ledRole: 'Legionary',
+          actors: phase.actionActors,
+          currentActorIndex: phase.actionCurrentActorIndex,
+        };
+        return advanceActor(newState, actionPhase);
+      }
+
+      return {
+        ...newState,
+        phase: { ...phase, currentDemandeeIndex: nextDemandeeIdx },
+      };
+    }
+
     case 'SKIP_ACTION': {
       const { phase } = state;
       if (phase.type !== 'action') return state;
@@ -539,6 +635,8 @@ export function getActivePlayerId(state: GameState): number | null {
       return phase.followers[phase.currentFollowerIndex] ?? null;
     case 'action':
       return phase.actors[phase.currentActorIndex] ?? null;
+    case 'legionary_demand':
+      return phase.demandees[phase.currentDemandeeIndex] ?? null;
     default:
       return null;
   }
@@ -561,6 +659,8 @@ export interface AvailableActions {
   laborerPoolOptions: MaterialType[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
   merchantOptions: MaterialType[];
+  legionaryOptions: { cardUid: number }[];
+  legionaryGiveOptions: { cardUid: number }[];
   canSkip: boolean;
 }
 
@@ -576,6 +676,8 @@ export function getAvailableActions(state: GameState): AvailableActions {
     laborerPoolOptions: [],
     laborerBuildingOptions: [],
     merchantOptions: [],
+    legionaryOptions: [],
+    legionaryGiveOptions: [],
     canSkip: false,
   };
 
@@ -603,6 +705,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
         result.leadOptions.push({ role: 'Architect', cardUid: card.uid });
         result.leadOptions.push({ role: 'Craftsman', cardUid: card.uid });
         result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
+        result.leadOptions.push({ role: 'Legionary', cardUid: card.uid });
         result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
       } else {
         const def = getCardDef(card);
@@ -614,6 +717,9 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
         if (def.material === 'Rubble') {
           result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
+        }
+        if (def.material === 'Brick') {
+          result.leadOptions.push({ role: 'Legionary', cardUid: card.uid });
         }
         if (def.material === 'Stone') {
           result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
@@ -698,6 +804,24 @@ export function getAvailableActions(state: GameState): AvailableActions {
           stockpileMaterialSet.add(getCardDef(card).material);
         }
         result.merchantOptions = [...stockpileMaterialSet];
+      }
+    }
+
+    if (phase.ledRole === 'Legionary') {
+      // Can reveal any non-Jack card from hand
+      for (const card of player.hand) {
+        if (!isJackCard(card)) {
+          result.legionaryOptions.push({ cardUid: card.uid });
+        }
+      }
+    }
+  }
+
+  // Legionary demand phase: demandee must give a matching card
+  if (phase.type === 'legionary_demand') {
+    for (const card of player.hand) {
+      if (!isJackCard(card) && getCardDef(card).material === phase.revealedMaterial) {
+        result.legionaryGiveOptions.push({ cardUid: card.uid });
       }
     }
   }

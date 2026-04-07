@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
 
@@ -497,9 +497,9 @@ describe('Material-to-role mapping (G4R)', () => {
     expect(ROLE_TO_MATERIAL.Craftsman).toBe('Wood');
   });
 
-  it('Brick card defs have role Laborer, Laborer leads with Rubble', () => {
-    expect(MATERIAL_TO_ROLE.Brick).toBe('Laborer');
-    expect(ROLE_TO_MATERIAL.Laborer).toBe('Rubble');
+  it('Brick card defs have role Legionary, Legionary leads with Brick', () => {
+    expect(MATERIAL_TO_ROLE.Brick).toBe('Legionary');
+    expect(ROLE_TO_MATERIAL.Legionary).toBe('Brick');
   });
 
   it('leading Craftsman requires a Wood card', () => {
@@ -522,10 +522,10 @@ describe('Material-to-role mapping (G4R)', () => {
     }
   });
 
-  it('all Brick card defs have role Laborer', () => {
+  it('all Brick card defs have role Legionary', () => {
     for (const def of CARD_DEFS) {
       if (def.material === 'Brick') {
-        expect(def.role).toBe('Laborer');
+        expect(def.role).toBe('Legionary');
       }
     }
   });
@@ -1517,5 +1517,192 @@ describe('Merchant action', () => {
 
     const actions = getAvailableActions(state);
     expect(actions.merchantOptions).toHaveLength(0);
+  });
+});
+
+describe('Legionary action', () => {
+  function makeLegionaryState(playerCount: number = 2): GameState {
+    const rng = seededRng(42);
+    let state = createInitialState(playerCount, ['A', 'B', 'C', 'D'].slice(0, playerCount), rng);
+
+    // Give player 0 a Wood card to reveal
+    const woodCard: Card = { uid: state.nextUid, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
+    // Give player 1 a Wood card to be demanded
+    const woodCard2: Card = { uid: state.nextUid + 1, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
+    // Put a Wood card in the pool
+    const woodPoolCard: Card = { uid: state.nextUid + 2, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
+
+    state = {
+      ...state,
+      nextUid: state.nextUid + 3,
+      pool: [woodPoolCard],
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, hand: [woodCard, ...p.hand] };
+        if (i === 1) return { ...p, hand: [woodCard2, ...p.hand] };
+        return p;
+      }),
+      phase: { type: 'action', ledRole: 'Legionary', actors: [0], currentActorIndex: 0 },
+    };
+    return state;
+  }
+
+  it('Brick maps to Legionary role', () => {
+    expect(MATERIAL_TO_ROLE['Brick']).toBe('Legionary');
+    expect(ROLE_TO_MATERIAL['Legionary']).toBe('Brick');
+  });
+
+  it('Brick cards can lead Legionary', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+    const brickCard: Card = { uid: state.nextUid, defId: CARD_DEFS.find(d => d.material === 'Brick')!.id };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [...p.hand, brickCard] } : p
+      ),
+    };
+    const actions = getAvailableActions(state);
+    expect(actions.leadOptions.some(o => o.role === 'Legionary' && o.cardUid === brickCard.uid)).toBe(true);
+  });
+
+  it('revealing takes matching material from pool to stockpile', () => {
+    let state = makeLegionaryState();
+    const woodCard = state.players[0]!.hand[0]!;
+    expect(getCardDef(woodCard).material).toBe('Wood');
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: woodCard.uid });
+
+    // Should have taken the wood card from pool
+    const woodInPool = state.pool.filter(c => getCardDef(c).material === 'Wood').length;
+    expect(woodInPool).toBe(0);
+    // Should be in stockpile
+    const woodInStockpile = state.players[0]!.stockpile.filter(c => getCardDef(c).material === 'Wood');
+    expect(woodInStockpile.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('enters legionary_demand phase when neighbor has matching card', () => {
+    let state = makeLegionaryState();
+    const woodCard = state.players[0]!.hand[0]!;
+
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: woodCard.uid });
+
+    expect(state.phase.type).toBe('legionary_demand');
+    if (state.phase.type === 'legionary_demand') {
+      expect(state.phase.revealedMaterial).toBe('Wood');
+      expect(state.phase.demandees).toContain(1);
+      expect(getActivePlayerId(state)).toBe(1);
+    }
+  });
+
+  it('LEGIONARY_GIVE transfers card to actor stockpile and advances', () => {
+    let state = makeLegionaryState();
+    const woodCard = state.players[0]!.hand[0]!;
+
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: woodCard.uid });
+    expect(state.phase.type).toBe('legionary_demand');
+
+    // Player 1 gives their wood card
+    const p1WoodCard = state.players[1]!.hand.find(c => !isJackCard(c) && getCardDef(c).material === 'Wood')!;
+    const p1HandBefore = state.players[1]!.hand.length;
+
+    state = gameReducer(state, { type: 'LEGIONARY_GIVE', cardUid: p1WoodCard.uid });
+
+    // Card removed from player 1's hand
+    expect(state.players[1]!.hand.length).toBe(p1HandBefore - 1);
+    // Card added to player 0's stockpile
+    expect(state.players[0]!.stockpile.some(c => c.uid === p1WoodCard.uid)).toBe(true);
+    // Should advance past action phase (only 1 actor)
+    expect(state.phase.type).toBe('lead');
+  });
+
+  it('skips demand phase when no neighbor has matching material', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    // Give player 0 a Stone card; player 1 has no Stone
+    const stoneCard: Card = { uid: state.nextUid, defId: CARD_DEFS.find(d => d.material === 'Stone')!.id };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, hand: [stoneCard] };
+        if (i === 1) return { ...p, hand: [] }; // empty hand
+        return p;
+      }),
+      pool: [],
+      phase: { type: 'action', ledRole: 'Legionary', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: stoneCard.uid });
+    // Should skip straight to next phase since no pool match and no neighbor match
+    expect(state.phase.type).toBe('lead');
+  });
+
+  it('card stays in hand after reveal', () => {
+    let state = makeLegionaryState();
+    const woodCard = state.players[0]!.hand[0]!;
+    const handBefore = state.players[0]!.hand.length;
+
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: woodCard.uid });
+
+    // Card should still be in hand (just revealed, not consumed)
+    expect(state.players[0]!.hand.length).toBe(handBefore);
+    expect(state.players[0]!.hand.some(c => c.uid === woodCard.uid)).toBe(true);
+  });
+
+  it('cannot reveal a Jack', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+    const jackCard: Card = { uid: state.nextUid, defId: 'jack' };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [jackCard] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Legionary', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'LEGIONARY_REVEAL', cardUid: jackCard.uid });
+    expect(state).toBe(stateBefore); // no change
+  });
+
+  it('legionaryOptions lists non-Jack cards during Legionary action', () => {
+    let state = makeLegionaryState();
+    const actions = getAvailableActions(state);
+    expect(actions.legionaryOptions.length).toBeGreaterThan(0);
+    // No jacks in legionary options
+    for (const opt of actions.legionaryOptions) {
+      const card = state.players[0]!.hand.find(c => c.uid === opt.cardUid)!;
+      expect(isJackCard(card)).toBe(false);
+    }
+  });
+});
+
+describe('getNeighborIds', () => {
+  it('2-player: each player has one neighbor', () => {
+    expect(getNeighborIds(0, 2)).toEqual([1]);
+    expect(getNeighborIds(1, 2)).toEqual([0]);
+  });
+
+  it('3-player: each player has two neighbors (all others)', () => {
+    expect(getNeighborIds(0, 3)).toEqual([2, 1]);
+    expect(getNeighborIds(1, 3)).toEqual([0, 2]);
+    expect(getNeighborIds(2, 3)).toEqual([1, 0]);
+  });
+
+  it('4-player: only left and right, not diagonal', () => {
+    expect(getNeighborIds(0, 4)).toEqual([3, 1]);
+    expect(getNeighborIds(1, 4)).toEqual([0, 2]);
+    expect(getNeighborIds(2, 4)).toEqual([1, 3]);
+    expect(getNeighborIds(3, 4)).toEqual([2, 0]);
+  });
+
+  it('4-player: diagonal players are NOT neighbors', () => {
+    // Player 0 and 2 are diagonal
+    expect(getNeighborIds(0, 4)).not.toContain(2);
+    // Player 1 and 3 are diagonal
+    expect(getNeighborIds(1, 4)).not.toContain(3);
   });
 });

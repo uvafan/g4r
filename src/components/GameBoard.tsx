@@ -52,6 +52,10 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame }: GameBoardProps
 
     if (phase.type === 'follow') {
       for (const o of actions.followOptions) cardUids.add(o.cardUid);
+    } else if (phase.type === 'legionary_demand') {
+      for (const o of actions.legionaryGiveOptions) cardUids.add(o.cardUid);
+    } else if (phase.type === 'action' && phase.ledRole === 'Legionary') {
+      for (const o of actions.legionaryOptions) cardUids.add(o.cardUid);
     } else if (phase.type === 'action' && phase.ledRole === 'Architect') {
       for (const o of actions.architectOptions) cardUids.add(o.cardUid);
     } else if (phase.type === 'action' && phase.ledRole === 'Laborer') {

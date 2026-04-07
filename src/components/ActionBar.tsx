@@ -168,6 +168,46 @@ export function ActionBar({ state, selectedCardUid, selectedBuildingIndex, selec
         </>
       )}
 
+      {phase.type === 'action' && phase.ledRole === 'Legionary' && (
+        <>
+          {actions.legionaryOptions.length > 0 ? (
+            selectedCardUid !== null && actions.legionaryOptions.some(o => o.cardUid === selectedCardUid) ? (
+              <button onClick={() => dispatch({ type: 'LEGIONARY_REVEAL', cardUid: selectedCardUid })}>
+                Demand {(() => {
+                  const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                  return card ? getCardDef(card).material : '?';
+                })()}
+              </button>
+            ) : (
+              <span className="action-hint">Select a card from hand to reveal and demand its material</span>
+            )
+          ) : (
+            <span className="action-hint">No cards to reveal for Legionary</span>
+          )}
+        </>
+      )}
+
+      {phase.type === 'legionary_demand' && (
+        <>
+          {actions.legionaryGiveOptions.length > 0 ? (
+            selectedCardUid !== null && actions.legionaryGiveOptions.some(o => o.cardUid === selectedCardUid) ? (
+              <button onClick={() => dispatch({ type: 'LEGIONARY_GIVE', cardUid: selectedCardUid })}>
+                Give {(() => {
+                  const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                  return card ? getCardDef(card).name : '?';
+                })()} to Legionary
+              </button>
+            ) : (
+              <span className="action-hint">
+                Select a {phase.revealedMaterial} card to give to the Legionary
+              </span>
+            )
+          ) : (
+            <span className="action-hint">No matching cards to give</span>
+          )}
+        </>
+      )}
+
       {phase.type === 'action' && phase.ledRole === 'Laborer' && (
         <>
           {actions.laborerPoolOptions.length > 0 && (

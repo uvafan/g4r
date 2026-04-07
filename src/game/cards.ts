@@ -3,7 +3,7 @@ import { CardDef, Card, MaterialType, Role } from './types';
 export const MATERIAL_TO_ROLE: Record<MaterialType, Role> = {
   Rubble: 'Patron',
   Wood: 'Craftsman',
-  Brick: 'Laborer',
+  Brick: 'Legionary',
   Concrete: 'Architect',
   Stone: 'Merchant',
   Marble: 'Legionary',
@@ -23,7 +23,7 @@ export const ROLE_TO_MATERIAL: Record<Role, MaterialType> = {
   Craftsman: 'Wood',
   Laborer: 'Rubble',
   Architect: 'Concrete',
-  Legionary: 'Marble',
+  Legionary: 'Brick',
   Merchant: 'Stone',
 };
 
@@ -58,15 +58,15 @@ export const CARD_DEFS: CardDef[] = [
   { id: 'cross', name: 'Cross', material: 'Wood', cost: 1, role: 'Craftsman', power: '+1 Refresh Hand Size' },
   { id: 'statue', name: 'Statue', material: 'Wood', cost: 1, role: 'Craftsman', power: '+3 VP' },
 
-  // Brick (cost 2, Craftsman)
-  { id: 'foundry', name: 'Foundry', material: 'Brick', cost: 2, role: 'Laborer', power: 'Upon completion, you may put the entire Pool and/or your entire Hand (discarding Jacks) into your Stockpile.' },
-  { id: 'school', name: 'School', material: 'Brick', cost: 2, role: 'Laborer', power: 'Upon completion, you may Think once per influence you have.' },
-  { id: 'shrine', name: 'Shrine', material: 'Brick', cost: 2, role: 'Laborer', power: '+2 Refresh Hand Size' },
-  { id: 'stage', name: 'Stage', material: 'Brick', cost: 2, role: 'Laborer', power: 'After taking a Patron action, you may think.' },
-  { id: 'bath', name: 'Bath', material: 'Brick', cost: 2, role: 'Laborer', power: 'After you perform a Patron action, the client you hired may perform its action once, unless it is a Patron client.' },
-  { id: 'atrium', name: 'Atrium', material: 'Brick', cost: 2, role: 'Laborer', power: 'When you perform a Merchant action, you may instead put one material face down from your Deck into your Vault.' },
-  { id: 'academy', name: 'Academy', material: 'Brick', cost: 2, role: 'Laborer', power: 'After any turn in which you performed at least one Craftsman action, you may think.' },
-  { id: 'circus_maximus', name: 'Circus Maximus', material: 'Brick', cost: 2, role: 'Laborer', power: 'You may take an additional client of the same type from the Generic Supply for each current client, as well as one additional when you gain a client in the future.' },
+  // Brick (cost 2, Legionary)
+  { id: 'foundry', name: 'Foundry', material: 'Brick', cost: 2, role: 'Legionary', power: 'Upon completion, you may put the entire Pool and/or your entire Hand (discarding Jacks) into your Stockpile.' },
+  { id: 'school', name: 'School', material: 'Brick', cost: 2, role: 'Legionary', power: 'Upon completion, you may Think once per influence you have.' },
+  { id: 'shrine', name: 'Shrine', material: 'Brick', cost: 2, role: 'Legionary', power: '+2 Refresh Hand Size' },
+  { id: 'stage', name: 'Stage', material: 'Brick', cost: 2, role: 'Legionary', power: 'After taking a Patron action, you may think.' },
+  { id: 'bath', name: 'Bath', material: 'Brick', cost: 2, role: 'Legionary', power: 'After you perform a Patron action, the client you hired may perform its action once, unless it is a Patron client.' },
+  { id: 'atrium', name: 'Atrium', material: 'Brick', cost: 2, role: 'Legionary', power: 'When you perform a Merchant action, you may instead put one material face down from your Deck into your Vault.' },
+  { id: 'academy', name: 'Academy', material: 'Brick', cost: 2, role: 'Legionary', power: 'After any turn in which you performed at least one Craftsman action, you may think.' },
+  { id: 'circus_maximus', name: 'Circus Maximus', material: 'Brick', cost: 2, role: 'Legionary', power: 'You may take an additional client of the same type from the Generic Supply for each current client, as well as one additional when you gain a client in the future.' },
 
   // Concrete (cost 2, Architect)
   { id: 'road', name: 'Road', material: 'Concrete', cost: 2, role: 'Architect', power: 'You may use any material to build Stone buildings.' },
@@ -113,7 +113,7 @@ export const JACK_CARD_DEF: CardDef = {
 export const GENERIC_CARD_DEFS: CardDef[] = [
   { id: 'generic_rubble', name: 'Generic', material: 'Rubble', cost: 1, role: 'Patron', power: '' },
   { id: 'generic_wood', name: 'Generic', material: 'Wood', cost: 1, role: 'Craftsman', power: '' },
-  { id: 'generic_brick', name: 'Generic', material: 'Brick', cost: 2, role: 'Laborer', power: '' },
+  { id: 'generic_brick', name: 'Generic', material: 'Brick', cost: 2, role: 'Legionary', power: '' },
   { id: 'generic_concrete', name: 'Generic', material: 'Concrete', cost: 2, role: 'Architect', power: '' },
   { id: 'generic_stone', name: 'Generic', material: 'Stone', cost: 3, role: 'Legionary', power: '' },
   { id: 'generic_marble', name: 'Generic', material: 'Marble', cost: 3, role: 'Merchant', power: '' },

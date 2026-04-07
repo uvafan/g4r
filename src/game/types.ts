@@ -2,7 +2,7 @@ export type MaterialType = 'Rubble' | 'Wood' | 'Brick' | 'Concrete' | 'Stone' | 
 
 export type Role = 'Patron' | 'Laborer' | 'Craftsman' | 'Architect' | 'Legionary' | 'Merchant';
 
-export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer' | 'Merchant';
+export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer' | 'Legionary' | 'Merchant';
 
 export interface CardDef {
   id: string;
@@ -39,6 +39,7 @@ export type Phase =
   | { type: 'lead'; leaderId: number }
   | { type: 'follow'; leaderId: number; ledRole: ActiveRole; currentFollowerIndex: number; followers: number[]; actors: number[] }
   | { type: 'action'; ledRole: ActiveRole; actors: number[]; currentActorIndex: number }
+  | { type: 'legionary_demand'; revealedMaterial: MaterialType; demandees: number[]; currentDemandeeIndex: number; actionActors: number[]; actionCurrentActorIndex: number }
   | { type: 'gameOver' };
 
 export interface Sites {
@@ -89,4 +90,6 @@ export type GameAction =
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
   | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }
   | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType }
+  | { type: 'LEGIONARY_REVEAL'; cardUid: number }
+  | { type: 'LEGIONARY_GIVE'; cardUid: number }
   | { type: 'SKIP_ACTION' };
