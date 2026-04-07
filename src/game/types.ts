@@ -2,7 +2,7 @@ export type MaterialType = 'Rubble' | 'Wood' | 'Brick' | 'Concrete' | 'Stone' | 
 
 export type Role = 'Patron' | 'Laborer' | 'Craftsman' | 'Architect' | 'Legionary' | 'Merchant';
 
-export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer';
+export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer' | 'Merchant';
 
 export interface CardDef {
   id: string;
@@ -29,6 +29,7 @@ export interface Player {
   name: string;
   hand: Card[];
   stockpile: Card[];
+  vault: Card[];
   buildings: Building[];
   influence: number;
 }
@@ -87,4 +88,5 @@ export type GameAction =
   | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
   | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }
+  | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType }
   | { type: 'SKIP_ACTION' };

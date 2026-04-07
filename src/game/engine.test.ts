@@ -933,6 +933,7 @@ describe('Jack pile', () => {
     expect(roles).toContain('Architect');
     expect(roles).toContain('Craftsman');
     expect(roles).toContain('Laborer');
+    expect(roles).toContain('Merchant');
   });
 
   it('Jack appears in follow options regardless of led role', () => {
@@ -1285,5 +1286,153 @@ describe('Laborer action', () => {
 
     // Should advance to next leader since only 1 actor
     expect(state.phase.type).toBe('lead');
+  });
+});
+
+describe('Merchant action', () => {
+  it('moves material from stockpile to vault', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brickStockpile: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, stockpile: [brickStockpile] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+
+    expect(state.players[0]!.stockpile).toHaveLength(0);
+    expect(state.players[0]!.vault).toHaveLength(1);
+    expect(getCardDef(state.players[0]!.vault[0]!).material).toBe('Brick');
+  });
+
+  it('rejects if material not in stockpile', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    state = {
+      ...state,
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+
+    expect(state.players[0]!.vault).toHaveLength(0);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('rejects if not in Merchant action phase', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brickStockpile: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, stockpile: [brickStockpile] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Laborer', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+
+    expect(state.players[0]!.stockpile).toHaveLength(1);
+    expect(state.players[0]!.vault).toHaveLength(0);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('advances actor after merchant action', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brickStockpile: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, stockpile: [brickStockpile] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Brick' });
+
+    expect(state.phase.type).toBe('lead');
+  });
+
+  it('leading Merchant requires a Stone card', () => {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    const actions = getAvailableActions(state);
+    for (const opt of actions.leadOptions) {
+      if (opt.role === 'Merchant') {
+        const card = state.players[0]!.hand.find(c => c.uid === opt.cardUid)!;
+        expect(getCardDef(card).material).toBe('Stone');
+      }
+    }
+  });
+
+  it('merchantOptions lists stockpile material types', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brickStockpile: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const woodStockpile: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, stockpile: [brickStockpile, woodStockpile] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.merchantOptions).toContain('Brick');
+    expect(actions.merchantOptions).toContain('Wood');
+    expect(actions.merchantOptions).toHaveLength(2);
+  });
+
+  it('merchantOptions is empty when stockpile is empty', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    state = {
+      ...state,
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.merchantOptions).toHaveLength(0);
+  });
+
+  it('player vault initializes empty', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    expect(state.players[0]!.vault).toHaveLength(0);
+    expect(state.players[1]!.vault).toHaveLength(0);
+  });
+
+  it('Jack can lead Merchant', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const jack: Card = { uid: state.nextUid, defId: 'jack' };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [...p.hand, jack] } : p
+      ),
+    };
+
+    const actions = getAvailableActions(state);
+    const jackLeadOptions = actions.leadOptions.filter(o => o.cardUid === jack.uid);
+    expect(jackLeadOptions.some(o => o.role === 'Merchant')).toBe(true);
   });
 });

@@ -22,12 +22,16 @@ const defaultState: GameState = {
 };
 
 function migrateState(state: GameState): GameState {
-  // Add stockpile to players if missing (added with Laborer role)
-  const needsMigration = state.players.some(p => !('stockpile' in p));
+  // Add stockpile/vault to players if missing (added with Laborer/Merchant roles)
+  const needsMigration = state.players.some(p => !('stockpile' in p) || !('vault' in p));
   if (needsMigration) {
     return {
       ...state,
-      players: state.players.map((p: any) => ('stockpile' in p) ? p : { ...p, stockpile: [] }) as GameState['players'],
+      players: state.players.map((p: any) => ({
+        ...p,
+        stockpile: ('stockpile' in p) ? p.stockpile : [],
+        vault: ('vault' in p) ? p.vault : [],
+      })) as GameState['players'],
     };
   }
   return state;

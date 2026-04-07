@@ -5,8 +5,8 @@ export const MATERIAL_TO_ROLE: Record<MaterialType, Role> = {
   Wood: 'Craftsman',
   Brick: 'Laborer',
   Concrete: 'Architect',
-  Stone: 'Legionary',
-  Marble: 'Merchant',
+  Stone: 'Merchant',
+  Marble: 'Legionary',
 };
 
 export const MATERIAL_VALUE: Record<MaterialType, number> = {
@@ -23,8 +23,8 @@ export const ROLE_TO_MATERIAL: Record<Role, MaterialType> = {
   Craftsman: 'Wood',
   Laborer: 'Rubble',
   Architect: 'Concrete',
-  Legionary: 'Stone',
-  Merchant: 'Marble',
+  Legionary: 'Marble',
+  Merchant: 'Stone',
 };
 
 export const MATERIAL_COLORS: Record<MaterialType, string> = {

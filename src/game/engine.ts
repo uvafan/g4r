@@ -26,6 +26,7 @@ export function createInitialState(
       name: playerNames[i] ?? `Player ${i + 1}`,
       hand,
       stockpile: [],
+      vault: [],
       buildings: [],
       influence: 0,
     });
@@ -488,6 +489,32 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return advanceActor(newState, phase);
     }
 
+    case 'MERCHANT_STOCKPILE_TO_VAULT': {
+      const { phase } = state;
+      if (phase.type !== 'action' || phase.ledRole !== 'Merchant') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+
+      const stockpileIdx = player.stockpile.findIndex(
+        c => getCardDef(c).material === action.material
+      );
+      if (stockpileIdx === -1) return state;
+
+      const card = player.stockpile[stockpileIdx]!;
+      const newStockpile = [
+        ...player.stockpile.slice(0, stockpileIdx),
+        ...player.stockpile.slice(stockpileIdx + 1),
+      ];
+
+      const newState = updatePlayer(state, actorId, {
+        stockpile: newStockpile,
+        vault: [...player.vault, card],
+      });
+
+      return advanceActor(newState, phase);
+    }
+
     case 'SKIP_ACTION': {
       const { phase } = state;
       if (phase.type !== 'action') return state;
@@ -530,6 +557,7 @@ export interface AvailableActions {
   craftsmanOptions: { buildingIndex: number; cardUid: number }[];
   laborerPoolOptions: MaterialType[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
+  merchantOptions: MaterialType[];
   canSkip: boolean;
 }
 
@@ -544,6 +572,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
     craftsmanOptions: [],
     laborerPoolOptions: [],
     laborerBuildingOptions: [],
+    merchantOptions: [],
     canSkip: false,
   };
 
@@ -571,6 +600,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
         result.leadOptions.push({ role: 'Architect', cardUid: card.uid });
         result.leadOptions.push({ role: 'Craftsman', cardUid: card.uid });
         result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
+        result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
       } else {
         const def = getCardDef(card);
         if (def.material === 'Concrete') {
@@ -581,6 +611,9 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
         if (def.material === 'Rubble') {
           result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
+        }
+        if (def.material === 'Stone') {
+          result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
         }
       }
     }
@@ -652,6 +685,14 @@ export function getAvailableActions(state: GameState): AvailableActions {
           });
         }
       }
+    }
+
+    if (phase.ledRole === 'Merchant') {
+      const stockpileMaterialSet = new Set<MaterialType>();
+      for (const card of player.stockpile) {
+        stockpileMaterialSet.add(getCardDef(card).material);
+      }
+      result.merchantOptions = [...stockpileMaterialSet];
     }
   }
 

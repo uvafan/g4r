@@ -144,6 +144,30 @@ export function ActionBar({ state, selectedCardUid, selectedBuildingIndex, selec
         </>
       )}
 
+      {phase.type === 'action' && phase.ledRole === 'Merchant' && (
+        <>
+          {actions.merchantOptions.length > 0 ? (
+            <div className="merchant-vault-select">
+              <span className="action-label">Move to Vault from Stockpile:</span>
+              {actions.merchantOptions.map(mat => (
+                <button
+                  key={mat}
+                  style={{ backgroundColor: MATERIAL_COLORS[mat] }}
+                  onClick={() => dispatch({
+                    type: 'MERCHANT_STOCKPILE_TO_VAULT',
+                    material: mat,
+                  })}
+                >
+                  {mat}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="action-hint">No materials in stockpile to vault</span>
+          )}
+        </>
+      )}
+
       {phase.type === 'action' && phase.ledRole === 'Laborer' && (
         <>
           {actions.laborerPoolOptions.length > 0 && (

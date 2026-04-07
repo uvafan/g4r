@@ -17,6 +17,23 @@ export function PlayerArea({ player, isActive, selectedBuildingIndex, highlighte
         <strong>{player.name}</strong>
         <span>Influence: {player.influence} | Hand: {player.hand.length}</span>
       </div>
+      {player.vault.length > 0 && (
+        <div className="stockpile-row">
+          <span className="stockpile-label">Vault:</span>
+          {(() => {
+            const counts: Partial<Record<MaterialType, number>> = {};
+            for (const card of player.vault) {
+              const mat = getCardDef(card).material;
+              counts[mat] = (counts[mat] ?? 0) + 1;
+            }
+            return (Object.entries(counts) as [MaterialType, number][]).map(([mat, count]) => (
+              <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
+                {count} {mat}
+              </div>
+            ));
+          })()}
+        </div>
+      )}
       {player.stockpile.length > 0 && (
         <div className="stockpile-row">
           <span className="stockpile-label">Stockpile:</span>
