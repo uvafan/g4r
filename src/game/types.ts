@@ -1,0 +1,90 @@
+export type MaterialType = 'Rubble' | 'Wood' | 'Brick' | 'Concrete' | 'Stone' | 'Marble';
+
+export type Role = 'Patron' | 'Laborer' | 'Craftsman' | 'Architect' | 'Legionary' | 'Merchant';
+
+export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer';
+
+export interface CardDef {
+  id: string;
+  name: string;
+  material: MaterialType;
+  cost: number;
+  role: Role;
+  power: string;
+}
+
+export interface Card {
+  uid: number;
+  defId: string;
+}
+
+export interface Building {
+  foundationCard: Card;
+  materials: Card[];
+  completed: boolean;
+}
+
+export interface Player {
+  id: number;
+  name: string;
+  hand: Card[];
+  stockpile: Card[];
+  buildings: Building[];
+  influence: number;
+}
+
+export type Phase =
+  | { type: 'setup' }
+  | { type: 'lead'; leaderId: number }
+  | { type: 'follow'; leaderId: number; ledRole: ActiveRole; currentFollowerIndex: number; followers: number[]; actors: number[] }
+  | { type: 'action'; ledRole: ActiveRole; actors: number[]; currentActorIndex: number }
+  | { type: 'gameOver' };
+
+export interface Sites {
+  Rubble: number;
+  Wood: number;
+  Brick: number;
+  Concrete: number;
+  Stone: number;
+  Marble: number;
+}
+
+export interface GenericSupply {
+  Rubble: number;
+  Wood: number;
+  Brick: number;
+  Concrete: number;
+  Stone: number;
+  Marble: number;
+}
+
+export interface GameState {
+  players: Player[];
+  deck: Card[];
+  pool: Card[];
+  sites: Sites;
+  genericSupply: GenericSupply;
+  jackPile: number;
+  nextUid: number;
+  phase: Phase;
+  handLimit: number;
+  playerCount: number;
+  leadPlayerIdx: number;
+}
+
+export type ThinkOption =
+  | { kind: 'refresh' }
+  | { kind: 'draw1' }
+  | { kind: 'generic'; material: MaterialType }
+  | { kind: 'jack' };
+
+export type GameAction =
+  | { type: 'START_GAME'; playerCount: number; playerNames: string[] }
+  | { type: 'LEAD_ROLE'; role: ActiveRole; cardUid: number }
+  | { type: 'THINK'; option: ThinkOption }
+  | { type: 'FOLLOW_ROLE'; cardUid: number }
+  | { type: 'ARCHITECT_START'; cardUid: number }
+  | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
+  | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
+  | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }
+  | { type: 'SKIP_ACTION' };
