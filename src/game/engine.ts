@@ -28,6 +28,7 @@ export function createInitialState(
       stockpile: [],
       vault: [],
       buildings: [],
+      clientele: [],
       influence: 0,
     });
   }
@@ -617,6 +618,32 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       };
     }
 
+    case 'PATRON_HIRE': {
+      const { phase } = state;
+      if (phase.type !== 'action' || phase.ledRole !== 'Patron') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+
+      // Clientele capacity is limited by influence
+      if (player.clientele.length >= player.influence) return state;
+
+      const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
+      if (poolIdx === -1) return state;
+
+      const card = state.pool[poolIdx]!;
+      const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+
+      const newState = {
+        ...updatePlayer(state, actorId, {
+          clientele: [...player.clientele, card],
+        }),
+        pool: newPool,
+      };
+
+      return advanceActor(newState, phase);
+    }
+
     case 'SKIP_ACTION': {
       const { phase } = state;
       if (phase.type !== 'action') return state;
@@ -662,6 +689,7 @@ export interface AvailableActions {
   laborerPoolOptions: MaterialType[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
   merchantOptions: MaterialType[];
+  patronOptions: MaterialType[];
   legionaryOptions: { cardUid: number }[];
   legionaryGiveOptions: { cardUid: number }[];
   canSkip: boolean;
@@ -679,6 +707,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
     laborerPoolOptions: [],
     laborerBuildingOptions: [],
     merchantOptions: [],
+    patronOptions: [],
     legionaryOptions: [],
     legionaryGiveOptions: [],
     canSkip: false,
@@ -710,6 +739,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
         result.leadOptions.push({ role: 'Laborer', cardUid: card.uid });
         result.leadOptions.push({ role: 'Legionary', cardUid: card.uid });
         result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
+        result.leadOptions.push({ role: 'Patron', cardUid: card.uid });
       } else {
         const def = getCardDef(card);
         if (def.material === 'Concrete') {
@@ -726,6 +756,9 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
         if (def.material === 'Stone') {
           result.leadOptions.push({ role: 'Merchant', cardUid: card.uid });
+        }
+        if (def.material === 'Marble') {
+          result.leadOptions.push({ role: 'Patron', cardUid: card.uid });
         }
       }
     }
@@ -807,6 +840,17 @@ export function getAvailableActions(state: GameState): AvailableActions {
           stockpileMaterialSet.add(getCardDef(card).material);
         }
         result.merchantOptions = [...stockpileMaterialSet];
+      }
+    }
+
+    if (phase.ledRole === 'Patron') {
+      // Clientele capacity is limited by influence
+      if (player.clientele.length < player.influence) {
+        const poolMaterialSet = new Set<MaterialType>();
+        for (const card of state.pool) {
+          poolMaterialSet.add(getCardDef(card).material);
+        }
+        result.patronOptions = [...poolMaterialSet];
       }
     }
 

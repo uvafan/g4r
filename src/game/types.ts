@@ -2,7 +2,7 @@ export type MaterialType = 'Rubble' | 'Wood' | 'Brick' | 'Concrete' | 'Stone' | 
 
 export type Role = 'Patron' | 'Laborer' | 'Craftsman' | 'Architect' | 'Legionary' | 'Merchant';
 
-export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer' | 'Legionary' | 'Merchant';
+export type ActiveRole = 'Architect' | 'Craftsman' | 'Laborer' | 'Legionary' | 'Merchant' | 'Patron';
 
 export interface CardDef {
   id: string;
@@ -31,6 +31,7 @@ export interface Player {
   stockpile: Card[];
   vault: Card[];
   buildings: Building[];
+  clientele: Card[];
   influence: number;
 }
 
@@ -93,4 +94,5 @@ export type GameAction =
   | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType }
   | { type: 'LEGIONARY_REVEAL'; cardUid: number }
   | { type: 'LEGIONARY_GIVE'; cardUid: number }
+  | { type: 'PATRON_HIRE'; material: MaterialType }
   | { type: 'SKIP_ACTION' };

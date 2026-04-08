@@ -1711,6 +1711,185 @@ describe('Legionary action', () => {
   });
 });
 
+describe('Patron action', () => {
+  it('hires a card from pool into clientele', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const poolCard: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      pool: [poolCard],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1 } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Wood' });
+
+    expect(state.players[0]!.clientele).toHaveLength(1);
+    expect(getCardDef(state.players[0]!.clientele[0]!).material).toBe('Wood');
+    expect(state.pool).toHaveLength(0);
+  });
+
+  it('rejects if material not in pool', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    state = {
+      ...state,
+      pool: [],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1 } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Brick' });
+
+    expect(state.players[0]!.clientele).toHaveLength(0);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('rejects if clientele is at capacity (limited by influence)', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const existingClient: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const poolCard: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      pool: [poolCard],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1, clientele: [existingClient] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Wood' });
+
+    expect(state.players[0]!.clientele).toHaveLength(1);
+    expect(state.pool).toHaveLength(1);
+    expect(state.phase).toEqual(stateBefore.phase);
+  });
+
+  it('rejects if not in Patron action phase', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const poolCard: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      pool: [poolCard],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1 } : p
+      ),
+      phase: { type: 'action', ledRole: 'Laborer', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Wood' });
+
+    expect(state.players[0]!.clientele).toHaveLength(0);
+    expect(state.pool).toHaveLength(1);
+  });
+
+  it('advances actor after patron action', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const poolCard: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      pool: [poolCard],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1 } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Wood' });
+
+    expect(state.phase.type).toBe('lead');
+  });
+
+  it('leading Patron requires a Marble card', () => {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    const actions = getAvailableActions(state);
+    for (const opt of actions.leadOptions) {
+      if (opt.role === 'Patron') {
+        const card = state.players[0]!.hand.find(c => c.uid === opt.cardUid)!;
+        const def = getCardDef(card);
+        expect(def.material === 'Marble' || isJackCard(card)).toBe(true);
+      }
+    }
+  });
+
+  it('patronOptions lists pool material types when clientele has capacity', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const poolBrick: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const poolWood: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      pool: [poolBrick, poolWood],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 2 } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.patronOptions).toContain('Brick');
+    expect(actions.patronOptions).toContain('Wood');
+  });
+
+  it('patronOptions is empty when clientele is full', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const existingClient: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Brick') };
+    const poolCard: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      pool: [poolCard],
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 1, clientele: [existingClient] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.patronOptions).toHaveLength(0);
+  });
+
+  it('patronOptions is empty with 0 influence', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const poolCard: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      pool: [poolCard],
+      phase: { type: 'action', ledRole: 'Patron', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.patronOptions).toHaveLength(0);
+  });
+});
+
 describe('getNeighborIds', () => {
   it('2-player: each player has one neighbor', () => {
     expect(getNeighborIds(0, 2)).toEqual([1]);

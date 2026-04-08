@@ -15,3 +15,4 @@ A web implementation of Glory to Rome with modifications (Glory 4 Rome / G4R).
 
 ## Development Practices
 - **Regression tests on corrections**: Whenever the user requests a correction to the game implementation, create a test that verifies the corrected behavior stays correct.
+- **No Claude for Chrome**: Do not use Claude for Chrome browser automation tools in this project.

@@ -208,6 +208,30 @@ export function ActionBar({ state, selectedCardUid, selectedBuildingIndex, selec
         </>
       )}
 
+      {phase.type === 'action' && phase.ledRole === 'Patron' && (
+        <>
+          {actions.patronOptions.length > 0 ? (
+            <div className="patron-hire-select">
+              <span className="action-label">Hire from Pool:</span>
+              {actions.patronOptions.map(mat => (
+                <button
+                  key={mat}
+                  style={{ backgroundColor: MATERIAL_COLORS[mat] }}
+                  onClick={() => dispatch({
+                    type: 'PATRON_HIRE',
+                    material: mat,
+                  })}
+                >
+                  {mat}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span className="action-hint">No patron actions available</span>
+          )}
+        </>
+      )}
+
       {phase.type === 'action' && phase.ledRole === 'Laborer' && (
         <>
           {actions.laborerPoolOptions.length > 0 && (

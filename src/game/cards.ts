@@ -1,12 +1,12 @@
 import { CardDef, Card, MaterialType, Role } from './types';
 
 export const MATERIAL_TO_ROLE: Record<MaterialType, Role> = {
-  Rubble: 'Patron',
+  Rubble: 'Laborer',
   Wood: 'Craftsman',
   Brick: 'Legionary',
   Concrete: 'Architect',
   Stone: 'Merchant',
-  Marble: 'Legionary',
+  Marble: 'Patron',
 };
 
 export const MATERIAL_VALUE: Record<MaterialType, number> = {
@@ -19,7 +19,7 @@ export const MATERIAL_VALUE: Record<MaterialType, number> = {
 };
 
 export const ROLE_TO_MATERIAL: Record<Role, MaterialType> = {
-  Patron: 'Rubble',
+  Patron: 'Marble',
   Craftsman: 'Wood',
   Laborer: 'Rubble',
   Architect: 'Concrete',
@@ -38,15 +38,15 @@ export const MATERIAL_COLORS: Record<MaterialType, string> = {
 
 // All 48 active G4R buildings from the card spreadsheet
 export const CARD_DEFS: CardDef[] = [
-  // Rubble (cost 1, Patron)
-  { id: 'barracks', name: 'Barracks', material: 'Rubble', cost: 1, role: 'Patron', power: 'When demanding a type of material with a Legionary action, you obtain all available materials of that type, not just one.' },
-  { id: 'quarry', name: 'Quarry', material: 'Rubble', cost: 1, role: 'Patron', power: 'After finishing a structure, you may take an additional Craftsman action.' },
-  { id: 'bridge', name: 'Bridge', material: 'Rubble', cost: 1, role: 'Patron', power: "During a Legionary action, you may instead take materials from opponents' Stockpiles." },
-  { id: 'junkyard', name: 'Junkyard', material: 'Rubble', cost: 1, role: 'Patron', power: 'Upon completion, you may put your entire Hand into your stockpile, optionally keeping your Jacks.' },
-  { id: 'fortress', name: 'Fortress', material: 'Rubble', cost: 1, role: 'Patron', power: 'Every pair of 2 clients of the same type in your Clientele also counts as a Legionary client.' },
-  { id: 'vat', name: 'Vat', material: 'Rubble', cost: 1, role: 'Patron', power: 'Concrete buildings require only one material for you to complete them.' },
-  { id: 'encampment', name: 'Encampment', material: 'Rubble', cost: 1, role: 'Patron', power: 'After finishing a building, you may immediately start a building of the same type (including on an out of town site).' },
-  { id: 'scriptorium', name: 'Scriptorium', material: 'Rubble', cost: 1, role: 'Patron', power: 'When performing a Craftsman or Laborer action, you may draw materials from the Pool as though they came from your Hand or Stockpile.' },
+  // Rubble (cost 1, Laborer)
+  { id: 'barracks', name: 'Barracks', material: 'Rubble', cost: 1, role: 'Laborer', power: 'When demanding a type of material with a Legionary action, you obtain all available materials of that type, not just one.' },
+  { id: 'quarry', name: 'Quarry', material: 'Rubble', cost: 1, role: 'Laborer', power: 'After finishing a structure, you may take an additional Craftsman action.' },
+  { id: 'bridge', name: 'Bridge', material: 'Rubble', cost: 1, role: 'Laborer', power: "During a Legionary action, you may instead take materials from opponents' Stockpiles." },
+  { id: 'junkyard', name: 'Junkyard', material: 'Rubble', cost: 1, role: 'Laborer', power: 'Upon completion, you may put your entire Hand into your stockpile, optionally keeping your Jacks.' },
+  { id: 'fortress', name: 'Fortress', material: 'Rubble', cost: 1, role: 'Laborer', power: 'Every pair of 2 clients of the same type in your Clientele also counts as a Legionary client.' },
+  { id: 'vat', name: 'Vat', material: 'Rubble', cost: 1, role: 'Laborer', power: 'Concrete buildings require only one material for you to complete them.' },
+  { id: 'encampment', name: 'Encampment', material: 'Rubble', cost: 1, role: 'Laborer', power: 'After finishing a building, you may immediately start a building of the same type (including on an out of town site).' },
+  { id: 'scriptorium', name: 'Scriptorium', material: 'Rubble', cost: 1, role: 'Laborer', power: 'When performing a Craftsman or Laborer action, you may draw materials from the Pool as though they came from your Hand or Stockpile.' },
 
   // Wood (cost 1, Laborer)
   { id: 'crane', name: 'Crane', material: 'Wood', cost: 1, role: 'Craftsman', power: 'As an Architect action, you may start two buildings from your hand.' },
@@ -78,25 +78,25 @@ export const CARD_DEFS: CardDef[] = [
   { id: 'aqueduct', name: 'Aqueduct', material: 'Concrete', cost: 2, role: 'Architect', power: 'Upon completion, you may perform a Patron action once per influence you have.' },
   { id: 'bar', name: 'Bar', material: 'Concrete', cost: 2, role: 'Architect', power: 'After you take a Patron action, you may reveal the top card of the deck. Then, put it into your Clientele or the Pool.' },
 
-  // Stone (cost 3, Legionary)
-  { id: 'sanctuary', name: 'Sanctuary', material: 'Stone', cost: 3, role: 'Legionary', power: 'Upon completion, you may steal a client from any player.' },
-  { id: 'library', name: 'Library', material: 'Stone', cost: 3, role: 'Legionary', power: 'After you Think, you may draw a card from the Deck.' },
-  { id: 'villa', name: 'Villa', material: 'Stone', cost: 3, role: 'Legionary', power: '+3 influence' },
-  { id: 'sewer', name: 'Sewer', material: 'Stone', cost: 3, role: 'Legionary', power: 'You may put any subset of the cards you use to lead or follow into your Stockpile when the turn is over, instead of the Pool.' },
-  { id: 'garden', name: 'Garden', material: 'Stone', cost: 3, role: 'Legionary', power: 'Your Clientele Capacity is doubled.' },
-  { id: 'keep', name: 'Keep', material: 'Stone', cost: 3, role: 'Legionary', power: 'Upon completion, you are the leader for the next 3 turns.' },
-  { id: 'colosseum', name: 'Colosseum', material: 'Stone', cost: 3, role: 'Legionary', power: '+1 VP for every card in your hand' },
-  { id: 'prison', name: 'Prison', material: 'Stone', cost: 3, role: 'Legionary', power: 'Upon completion, move up to half of your clients into your Vault, rounded down.' },
+  // Stone (cost 3, Merchant)
+  { id: 'sanctuary', name: 'Sanctuary', material: 'Stone', cost: 3, role: 'Merchant', power: 'Upon completion, you may steal a client from any player.' },
+  { id: 'library', name: 'Library', material: 'Stone', cost: 3, role: 'Merchant', power: 'After you Think, you may draw a card from the Deck.' },
+  { id: 'villa', name: 'Villa', material: 'Stone', cost: 3, role: 'Merchant', power: '+3 influence' },
+  { id: 'sewer', name: 'Sewer', material: 'Stone', cost: 3, role: 'Merchant', power: 'You may put any subset of the cards you use to lead or follow into your Stockpile when the turn is over, instead of the Pool.' },
+  { id: 'garden', name: 'Garden', material: 'Stone', cost: 3, role: 'Merchant', power: 'Your Clientele Capacity is doubled.' },
+  { id: 'keep', name: 'Keep', material: 'Stone', cost: 3, role: 'Merchant', power: 'Upon completion, you are the leader for the next 3 turns.' },
+  { id: 'colosseum', name: 'Colosseum', material: 'Stone', cost: 3, role: 'Merchant', power: '+1 VP for every card in your hand' },
+  { id: 'prison', name: 'Prison', material: 'Stone', cost: 3, role: 'Merchant', power: 'Upon completion, move up to half of your clients into your Vault, rounded down.' },
 
-  // Marble (cost 3, Merchant)
-  { id: 'latrine', name: 'Latrine', material: 'Marble', cost: 3, role: 'Merchant', power: 'Before you Think, you may discard one card from your hand to the Pool.' },
-  { id: 'fountain', name: 'Fountain', material: 'Marble', cost: 3, role: 'Merchant', power: 'As a Craftsman action, you may flip a card from the Deck, and then either use it to continue a structure, or put it in your Hand.' },
-  { id: 'stairway', name: 'Stairway', material: 'Marble', cost: 3, role: 'Merchant', power: "As a Craftsman or Laborer action, you may continue another player's completed structure. This makes that structure's function available to all players." },
-  { id: 'ludus_magnus', name: 'Ludus Magnus', material: 'Marble', cost: 3, role: 'Merchant', power: 'Every 2 Merchant clients in your Clientele also count as 1 client of every role.' },
-  { id: 'basilica', name: 'Basilica', material: 'Marble', cost: 3, role: 'Merchant', power: 'On any turn in which you perform a Merchant action, you may put a material from your Hand into your Vault.' },
-  { id: 'palace', name: 'Palace', material: 'Marble', cost: 3, role: 'Merchant', power: 'You may lead or follow with multiple cards of the same role, and take an extra action for each additional card.' },
-  { id: 'temple', name: 'Temple', material: 'Marble', cost: 3, role: 'Merchant', power: '+3 Refresh Hand Size' },
-  { id: 'senate', name: 'Senate', material: 'Marble', cost: 3, role: 'Merchant', power: 'When refreshing your hand, you may draw freely from the Jacks and the Generic Supply.' },
+  // Marble (cost 3, Patron)
+  { id: 'latrine', name: 'Latrine', material: 'Marble', cost: 3, role: 'Patron', power: 'Before you Think, you may discard one card from your hand to the Pool.' },
+  { id: 'fountain', name: 'Fountain', material: 'Marble', cost: 3, role: 'Patron', power: 'As a Craftsman action, you may flip a card from the Deck, and then either use it to continue a structure, or put it in your Hand.' },
+  { id: 'stairway', name: 'Stairway', material: 'Marble', cost: 3, role: 'Patron', power: "As a Craftsman or Laborer action, you may continue another player's completed structure. This makes that structure's function available to all players." },
+  { id: 'ludus_magnus', name: 'Ludus Magnus', material: 'Marble', cost: 3, role: 'Patron', power: 'Every 2 Merchant clients in your Clientele also count as 1 client of every role.' },
+  { id: 'basilica', name: 'Basilica', material: 'Marble', cost: 3, role: 'Patron', power: 'On any turn in which you perform a Merchant action, you may put a material from your Hand into your Vault.' },
+  { id: 'palace', name: 'Palace', material: 'Marble', cost: 3, role: 'Patron', power: 'You may lead or follow with multiple cards of the same role, and take an extra action for each additional card.' },
+  { id: 'temple', name: 'Temple', material: 'Marble', cost: 3, role: 'Patron', power: '+3 Refresh Hand Size' },
+  { id: 'senate', name: 'Senate', material: 'Marble', cost: 3, role: 'Patron', power: 'When refreshing your hand, you may draw freely from the Jacks and the Generic Supply.' },
 ];
 
 // Jack card definition — wild for leading/following, cannot be used as building or material
@@ -111,12 +111,12 @@ export const JACK_CARD_DEF: CardDef = {
 
 // Generic card definitions — one per material type, no power when completed
 export const GENERIC_CARD_DEFS: CardDef[] = [
-  { id: 'generic_rubble', name: 'Generic', material: 'Rubble', cost: 1, role: 'Patron', power: '' },
+  { id: 'generic_rubble', name: 'Generic', material: 'Rubble', cost: 1, role: 'Laborer', power: '' },
   { id: 'generic_wood', name: 'Generic', material: 'Wood', cost: 1, role: 'Craftsman', power: '' },
   { id: 'generic_brick', name: 'Generic', material: 'Brick', cost: 2, role: 'Legionary', power: '' },
   { id: 'generic_concrete', name: 'Generic', material: 'Concrete', cost: 2, role: 'Architect', power: '' },
-  { id: 'generic_stone', name: 'Generic', material: 'Stone', cost: 3, role: 'Legionary', power: '' },
-  { id: 'generic_marble', name: 'Generic', material: 'Marble', cost: 3, role: 'Merchant', power: '' },
+  { id: 'generic_stone', name: 'Generic', material: 'Stone', cost: 3, role: 'Merchant', power: '' },
+  { id: 'generic_marble', name: 'Generic', material: 'Marble', cost: 3, role: 'Patron', power: '' },
 ];
 
 export const ALL_CARD_DEFS = [...CARD_DEFS, ...GENERIC_CARD_DEFS, JACK_CARD_DEF];

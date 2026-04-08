@@ -1,5 +1,5 @@
-import { Player, MaterialType } from '../game/types';
-import { getCardDef, MATERIAL_COLORS } from '../game/cards';
+import { Player, MaterialType, Role } from '../game/types';
+import { getCardDef, MATERIAL_COLORS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL } from '../game/cards';
 import { CardView } from './CardView';
 
 interface PlayerAreaProps {
@@ -29,6 +29,23 @@ export function PlayerArea({ player, isActive, selectedBuildingIndex, highlighte
             return (Object.entries(counts) as [MaterialType, number][]).map(([mat, count]) => (
               <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
                 {count} {mat}
+              </div>
+            ));
+          })()}
+        </div>
+      )}
+      {(player.clientele.length > 0 || player.influence > 0) && (
+        <div className="stockpile-row">
+          <span className="stockpile-label">Clientele ({player.clientele.length}/{player.influence}):</span>
+          {(() => {
+            const counts: Partial<Record<Role, number>> = {};
+            for (const card of player.clientele) {
+              const role = MATERIAL_TO_ROLE[getCardDef(card).material];
+              counts[role] = (counts[role] ?? 0) + 1;
+            }
+            return (Object.entries(counts) as [Role, number][]).map(([role, count]) => (
+              <div key={role} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[ROLE_TO_MATERIAL[role]] }}>
+                {count} {role}
               </div>
             ));
           })()}
