@@ -172,6 +172,36 @@ function getFollowerIds(state: GameState, leaderId: number): number[] {
   return ids;
 }
 
+export function getClientCountForRole(player: Player, role: ActiveRole): number {
+  const material = ROLE_TO_MATERIAL[role];
+  return player.clientele.filter(c => getCardDef(c).material === material).length;
+}
+
+function buildActorsWithClients(
+  state: GameState,
+  ledRole: ActiveRole,
+  leaderId: number,
+  cardActorIds: number[],
+): number[] {
+  const cardActorSet = new Set(cardActorIds);
+  const actors: number[] = [];
+
+  // Iterate in seat order starting from leader
+  for (let i = 0; i < state.playerCount; i++) {
+    const playerId = (leaderId + i) % state.playerCount;
+    const player = state.players[playerId]!;
+    const clientActions = getClientCountForRole(player, ledRole);
+    const cardAction = cardActorSet.has(playerId) ? 1 : 0;
+    const totalActions = cardAction + clientActions;
+
+    for (let j = 0; j < totalActions; j++) {
+      actors.push(playerId);
+    }
+  }
+
+  return actors;
+}
+
 function advanceLeader(state: GameState): GameState {
   const nextLeader = (state.leadPlayerIdx + 1) % state.playerCount;
   return {
@@ -187,7 +217,9 @@ function advanceFollower(state: GameState, phase: Phase & { type: 'follow' }): G
   const nextIdx = phase.currentFollowerIndex + 1;
   if (nextIdx >= phase.followers.length) {
     // All followers done, move to action phase
-    const actors = [phase.leaderId, ...phase.actors];
+    // Expand actors to include client-produced actions
+    const cardActors = [phase.leaderId, ...phase.actors];
+    const actors = buildActorsWithClients(state, phase.ledRole, phase.leaderId, cardActors);
     if (actors.length === 0) {
       return advanceLeader(state);
     }
@@ -315,12 +347,13 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const followers = getFollowerIds(state, phase.leaderId);
       if (followers.length === 0) {
         // Solo game edge case - go straight to action
+        const actors = buildActorsWithClients(newState, action.role, phase.leaderId, [phase.leaderId]);
         return {
           ...newState,
           phase: {
             type: 'action',
             ledRole: action.role,
-            actors: [phase.leaderId],
+            actors,
             currentActorIndex: 0,
           },
         };

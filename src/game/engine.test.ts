@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
 
@@ -1914,5 +1914,263 @@ describe('getNeighborIds', () => {
     expect(getNeighborIds(0, 4)).not.toContain(2);
     // Player 1 and 3 are diagonal
     expect(getNeighborIds(1, 4)).not.toContain(3);
+  });
+});
+
+describe('Clientele action production', () => {
+  function setupWithClients(): GameState {
+    // Create a 2-player state with player 0 having an Architect client
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    // Give player 0 a Concrete card in clientele (= Architect client)
+    const clientCard: Card = { uid: 8000, defId: 'road' }; // Concrete card
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, clientele: [clientCard], influence: 3 } : p
+      ),
+    };
+    return state;
+  }
+
+  it('getClientCountForRole counts matching clients', () => {
+    const state = setupWithClients();
+    const player0 = state.players[0]!;
+    expect(getClientCountForRole(player0, 'Architect')).toBe(1);
+    expect(getClientCountForRole(player0, 'Craftsman')).toBe(0);
+    expect(getClientCountForRole(player0, 'Laborer')).toBe(0);
+  });
+
+  it('leader with matching clients gets extra actions', () => {
+    let state = setupWithClients();
+
+    // Find a Concrete card in player 0's hand to lead Architect
+    let concreteCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Concrete');
+    if (!concreteCard) {
+      // Add one if not present
+      concreteCard = { uid: 8001, defId: 'road' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, concreteCard!] } : p
+        ),
+      };
+    }
+
+    // Lead Architect
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    expect(state.phase.type).toBe('follow');
+
+    // Player 1 thinks
+    state = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(state.phase.type).toBe('action');
+
+    if (state.phase.type === 'action') {
+      // Player 0 should have 2 actions: 1 from leading + 1 from Architect client
+      expect(state.phase.actors).toEqual([0, 0]);
+    }
+  });
+
+  it('follower with matching clients gets extra actions', () => {
+    let state = setupWithClients();
+
+    // Give player 1 a Concrete card in clientele too, plus influence
+    const clientCard: Card = { uid: 8002, defId: 'tower' }; // Concrete card
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 1 ? { ...p, clientele: [clientCard], influence: 3 } : p
+      ),
+    };
+
+    // Find Concrete cards for both players
+    let p0Concrete = state.players[0]!.hand.find(c => getCardDef(c).material === 'Concrete');
+    if (!p0Concrete) {
+      p0Concrete = { uid: 8003, defId: 'road' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, p0Concrete!] } : p
+        ),
+      };
+    }
+
+    // Lead Architect
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Architect', cardUid: p0Concrete.uid });
+
+    // Player 1 follows
+    let p1Concrete = state.players[1]!.hand.find(c => getCardDef(c).material === 'Concrete');
+    if (p1Concrete) {
+      state = gameReducer(state, { type: 'FOLLOW_ROLE', cardUid: p1Concrete.uid });
+      expect(state.phase.type).toBe('action');
+
+      if (state.phase.type === 'action') {
+        // Player 0: 1 (lead) + 1 (client) = 2
+        // Player 1: 1 (follow) + 1 (client) = 2
+        expect(state.phase.actors).toEqual([0, 0, 1, 1]);
+      }
+    }
+  });
+
+  it('thinker with matching clients still gets client actions', () => {
+    let state = setupWithClients();
+
+    // Give player 1 two Concrete clients + influence
+    const clientCard1: Card = { uid: 8010, defId: 'tower' };
+    const clientCard2: Card = { uid: 8011, defId: 'road' };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 1 ? { ...p, clientele: [clientCard1, clientCard2], influence: 3 } : p
+      ),
+    };
+
+    // Player 0 leads Architect
+    let concreteCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Concrete');
+    if (!concreteCard) {
+      concreteCard = { uid: 8012, defId: 'road' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, concreteCard!] } : p
+        ),
+      };
+    }
+
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+
+    // Player 1 thinks (does NOT follow)
+    state = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(state.phase.type).toBe('action');
+
+    if (state.phase.type === 'action') {
+      // Player 0: 1 (lead) + 1 (client) = 2
+      // Player 1: 0 (thought) + 2 (clients) = 2
+      expect(state.phase.actors).toEqual([0, 0, 1, 1]);
+    }
+  });
+
+  it('player with non-matching clients gets no bonus actions', () => {
+    let state = setupWithClients();
+    // Player 0 has an Architect client (Concrete)
+
+    // Find a Wood card to lead Craftsman
+    let woodCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Wood');
+    if (!woodCard) {
+      woodCard = { uid: 8020, defId: 'crane' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, woodCard!] } : p
+        ),
+      };
+    }
+
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Craftsman', cardUid: woodCard.uid });
+
+    // Player 1 thinks
+    state = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(state.phase.type).toBe('action');
+
+    if (state.phase.type === 'action') {
+      // Player 0 has Architect client, not Craftsman — only 1 action from leading
+      expect(state.phase.actors).toEqual([0]);
+    }
+  });
+
+  it('multiple client actions can each be used independently', () => {
+    let state = setupWithClients();
+
+    // Give player 0 two Architect clients
+    const clientCard2: Card = { uid: 8030, defId: 'tower' };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, clientele: [...p.clientele, clientCard2] } : p
+      ),
+    };
+
+    // Lead Architect
+    let concreteCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Concrete');
+    if (!concreteCard) {
+      concreteCard = { uid: 8031, defId: 'road' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, concreteCard!] } : p
+        ),
+      };
+    }
+
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    state = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(state.phase.type).toBe('action');
+
+    if (state.phase.type === 'action') {
+      // 1 (lead) + 2 (clients) = 3 actions
+      expect(state.phase.actors).toEqual([0, 0, 0]);
+
+      // Skip first action
+      state = gameReducer(state, { type: 'SKIP_ACTION' });
+      expect(state.phase.type).toBe('action');
+      expect(getActivePlayerId(state)).toBe(0); // Still player 0's turn
+
+      // Skip second action
+      state = gameReducer(state, { type: 'SKIP_ACTION' });
+      expect(state.phase.type).toBe('action');
+      expect(getActivePlayerId(state)).toBe(0); // Still player 0's turn
+
+      // Skip third action — turn ends
+      state = gameReducer(state, { type: 'SKIP_ACTION' });
+      expect(state.phase.type).toBe('lead');
+    }
+  });
+
+  it('patron clients produce extra patron actions for hiring', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    // Give player 0 a Marble client (Patron) + influence + pool cards to hire from
+    const patronClient: Card = { uid: 8040, defId: 'latrine' }; // Marble card
+    const poolCard1: Card = { uid: 8041, defId: 'crane' }; // Wood
+    const poolCard2: Card = { uid: 8042, defId: 'barracks' }; // Rubble
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, clientele: [patronClient], influence: 5 } : p
+      ),
+      pool: [poolCard1, poolCard2],
+    };
+
+    // Find a Marble card to lead Patron
+    let marbleCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Marble');
+    if (!marbleCard) {
+      marbleCard = { uid: 8043, defId: 'latrine' };
+      state = {
+        ...state,
+        players: state.players.map((p, i) =>
+          i === 0 ? { ...p, hand: [...p.hand, marbleCard!] } : p
+        ),
+      };
+    }
+
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Patron', cardUid: marbleCard.uid });
+    state = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+
+    if (state.phase.type === 'action') {
+      // 1 (lead) + 1 (Patron client) = 2 Patron actions
+      expect(state.phase.actors).toEqual([0, 0]);
+
+      // Use first action to hire Wood from pool
+      state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Wood' });
+      expect(state.players[0]!.clientele).toHaveLength(2); // original + hired
+      expect(state.phase.type).toBe('action');
+
+      // Use second action to hire Rubble from pool
+      state = gameReducer(state, { type: 'PATRON_HIRE', material: 'Rubble' });
+      expect(state.players[0]!.clientele).toHaveLength(3);
+      expect(state.phase.type).toBe('lead'); // turn ends
+    }
   });
 });
