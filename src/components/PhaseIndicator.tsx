@@ -15,6 +15,9 @@ export function PhaseIndicator({ state }: PhaseIndicatorProps) {
     case 'lead':
       phaseText = `Lead Phase — ${state.players[phase.leaderId]?.name}'s turn to lead`;
       break;
+    case 'thinkRound':
+      phaseText = `Think Round — ${activeName}'s turn to think`;
+      break;
     case 'follow':
       phaseText = `Follow Phase — Role: ${phase.ledRole} — ${activeName}'s turn`;
       break;

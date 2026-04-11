@@ -19,13 +19,20 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
     <div className={`player-area ${isActive ? 'player-active' : ''}`}>
       <div className="player-header">
         <strong>{player.name}</strong>
-        <span className="vp-total" title={
-          `Influence: ${vp.influence}` +
-          ` | Vault: ${vp.vault}` +
-          ` | Merchant Bonus: ${vp.merchantBonus}` +
-          (vp.merchantBonusCategories.length > 0 ? ` (${vp.merchantBonusCategories.join(', ')})` : '') +
-          (vp.buildingBonus > 0 ? ` | Building Bonus: ${vp.buildingBonus}` : '')
-        }>{vp.total} VP</span>
+        <span className="vp-total-wrapper">
+          <span className="vp-total">{vp.total} VP</span>
+          <div className="vp-tooltip">
+            <div className="vp-tooltip-row"><span>Influence</span><span>{vp.influence}</span></div>
+            <div className="vp-tooltip-row"><span>Vault</span><span>{vp.vault}</span></div>
+            {vp.merchantBonus > 0 && (
+              <div className="vp-tooltip-row"><span>Merchant Bonus ({vp.merchantBonusCategories.join(', ')})</span><span>{vp.merchantBonus}</span></div>
+            )}
+            {vp.buildingBonus > 0 && (
+              <div className="vp-tooltip-row"><span>Building Bonus</span><span>{vp.buildingBonus}</span></div>
+            )}
+            <div className="vp-tooltip-row vp-tooltip-total"><span>Total</span><span>{vp.total}</span></div>
+          </div>
+        </span>
         <span>Influence: {player.influence} | Hand: {player.hand.length}</span>
       </div>
       {(player.vault.length > 0 || player.influence > 0) && (
@@ -94,6 +101,9 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
               </div>
               {building.completed && <div className="building-badge">Complete</div>}
               {building.outOfTown && <div className="building-badge building-oot">Out of Town</div>}
+              {building.completed && def.power && (
+                <div className="building-power">{def.power}</div>
+              )}
             </div>
           );
         })}

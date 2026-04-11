@@ -432,6 +432,44 @@ export function deckAlmostOut(): Scenario {
   };
 }
 
+/** Statue power — completed Statue gives +3 VP */
+export function statuePower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+
+  const p0Buildings: Building[] = [
+    mkBuilding(uids.card('statue'), [uids.card('cross')], true),
+  ];
+
+  const p1Buildings: Building[] = [
+    mkBuilding(uids.card('crane'), [uids.card('dock')], true),
+  ];
+
+  return {
+    name: 'Statue power (+3 VP)',
+    description: 'Player 0 has completed Statue — should see +3 VP building bonus',
+    state: {
+      ...finalize(state, uids),
+      players: state.players.map((p, i) => {
+        if (i === 0) return {
+          ...p,
+          buildings: p0Buildings,
+          influence: 1,
+        };
+        if (i === 1) return {
+          ...p,
+          buildings: p1Buildings,
+          influence: 1,
+        };
+        return p;
+      }),
+      sites: {
+        ...state.sites,
+        Wood: state.sites.Wood - 2,
+      },
+    },
+  };
+}
+
 /** Game over — final scoring state */
 export function gameOver(): Scenario {
   let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
@@ -558,5 +596,6 @@ export const SCENARIOS: Scenario[] = [
   heavyVault(),
   deckAlmostOut(),
   nearDiversityEnd(),
+  statuePower(),
   gameOver(),
 ];

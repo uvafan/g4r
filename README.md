@@ -40,16 +40,16 @@ npm run build      # Production build
 - **Three-of-a-kind as Jack** -- Playing 3 cards of the same role to act as a Jack
 - **Actions remaining indicator** -- During the action phase, displays how many actions the current player has left (based on card played + matching clients)
 - **Out-of-town sites** -- 2 sites per material type, costing 2 architect actions each
+- **Deck exhaustion and 2 of 3 sites end game conditions** -- when the deck runs out, the game ends at the end of that round. If any single player has finished 2 buildings of a type that costs 1, 2 of a type that costs 2, and 2 of a type that costs 3, then the game ends that the end of that round.
 - **Dev tools** -- Copy/import game state JSON, shareable state URLs, loadable test scenarios
 - **137 tests** -- Covering initialization, think, lead/follow, architect, craftsman, laborer, legionary, merchant, patron, jack cards, round lifecycle, available actions, G4R material mapping, VP scoring, and out-of-town sites
 
 ### Not Yet Implemented
 
-- **Game end conditions** -- No end-game detection (e.g., all sites of a type claimed, deck exhaustion)
-- **Card powers** -- All 48 buildings have power text defined but none are mechanically active
-- **Display card text**
+- **Card powers (partial)** -- Passive VP bonuses active: Statue (+3 VP), Wall (+1 VP per 3 stockpile), Colosseum (+1 VP per hand card). Power text displayed on completed buildings. Remaining 45 building powers not yet mechanically active.
 - **Multi-player between people on different computers**
 - **Improve UX**
+- **Alternative game end conditions** -- For example, the old end condition of all normal sites being started.
 - **Turn timers**
 
 ## Project Structure
