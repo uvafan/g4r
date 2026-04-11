@@ -35,12 +35,12 @@ describe('createInitialState', () => {
 
   it('has correct site counts', () => {
     const state = createInitialState(3, ['A', 'B', 'C'], seededRng(42));
-    expect(state.sites.Rubble).toBe(3);
-    expect(state.sites.Wood).toBe(3);
-    expect(state.sites.Brick).toBe(3);
-    expect(state.sites.Concrete).toBe(3);
-    expect(state.sites.Stone).toBe(3);
-    expect(state.sites.Marble).toBe(3);
+    expect(state.sites.Rubble).toBe(4);
+    expect(state.sites.Wood).toBe(4);
+    expect(state.sites.Brick).toBe(4);
+    expect(state.sites.Concrete).toBe(4);
+    expect(state.sites.Stone).toBe(4);
+    expect(state.sites.Marble).toBe(4);
   });
 
   it('starts in lead phase with player 0', () => {
@@ -271,6 +271,44 @@ describe('Architect action', () => {
       }
     }
   });
+
+  it('allows starting a building of same material when existing one is completed', () => {
+    let state = getActionState();
+
+    // Find a Brick card
+    const brick1 = state.players[0]!.hand.find(c => getCardDef(c).material === 'Brick');
+    if (!brick1) return;
+
+    // Manually place a completed Brick building for player 0
+    const completedBuilding: import('./types').Building = {
+      foundationCard: brick1,
+      materials: [brick1, brick1], // enough materials for cost-2
+      completed: true,
+    };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              hand: p.hand.filter(c => c.uid !== brick1.uid),
+              buildings: [completedBuilding],
+            }
+          : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0], currentActorIndex: 0 },
+    };
+
+    // Find another Brick card in hand
+    const brick2 = state.players[0]!.hand.find(c => getCardDef(c).material === 'Brick');
+    if (!brick2) return;
+
+    const buildingsBefore = state.players[0]!.buildings.length;
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brick2.uid });
+
+    // Should have started a new building since existing one is completed
+    expect(state.players[0]!.buildings.length).toBe(buildingsBefore + 1);
+  });
 });
 
 describe('Craftsman action', () => {
@@ -327,8 +365,9 @@ describe('Craftsman action', () => {
     if (brickCards.length < 3) return; // need foundation + 2 materials
 
     const [foundation, mat1, mat2] = brickCards;
+    const sitesBefore = state.sites.Brick;
 
-    // Place building directly
+    // Place building directly (simulates having started it, consuming a site)
     const building: import('./types').Building = {
       foundationCard: foundation!,
       materials: [],
@@ -345,6 +384,7 @@ describe('Craftsman action', () => {
             }
           : p
       ),
+      sites: { ...state.sites, Brick: state.sites.Brick - 1 }, // simulate site consumption
     };
 
     // Add first material
@@ -372,6 +412,59 @@ describe('Craftsman action', () => {
     expect(state.players[0]!.buildings[0]!.completed).toBe(true);
     expect(state.players[0]!.buildings[0]!.materials).toHaveLength(2);
     expect(state.players[0]!.influence).toBe(2);
+    // Site is NOT returned on completion (stays consumed)
+    expect(state.sites.Brick).toBe(sitesBefore - 1);
+  });
+
+  it('allows starting new building of same material after completing one via craftsman', () => {
+    const rng = seededRng(200);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    const brickCards = state.players[0]!.hand.filter(c => getCardDef(c).material === 'Brick');
+    if (brickCards.length < 4) return; // need foundation + 2 materials + 1 new foundation
+
+    const [foundation, mat1, mat2, newFoundation] = brickCards;
+
+    // Place building directly
+    const building: import('./types').Building = {
+      foundationCard: foundation!,
+      materials: [],
+      completed: false,
+    };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              hand: p.hand.filter(c => c.uid !== foundation!.uid),
+              buildings: [building],
+            }
+          : p
+      ),
+    };
+
+    // Complete building via craftsman: add 2 materials
+    state = {
+      ...state,
+      phase: { type: 'action', ledRole: 'Craftsman', actors: [0], currentActorIndex: 0 },
+    };
+    state = gameReducer(state, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: mat1!.uid });
+    state = {
+      ...state,
+      phase: { type: 'action', ledRole: 'Craftsman', actors: [0], currentActorIndex: 0 },
+    };
+    state = gameReducer(state, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: mat2!.uid });
+    expect(state.players[0]!.buildings[0]!.completed).toBe(true);
+
+    // Now try to start a new Brick building — should succeed
+    state = {
+      ...state,
+      phase: { type: 'action', ledRole: 'Architect', actors: [0], currentActorIndex: 0 },
+    };
+    const buildingsBefore = state.players[0]!.buildings.length;
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: newFoundation!.uid });
+    expect(state.players[0]!.buildings.length).toBe(buildingsBefore + 1);
   });
 
   it('rejects material of wrong type', () => {

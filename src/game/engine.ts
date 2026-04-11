@@ -5,7 +5,7 @@ import {
 import { createDeck, getCardDef, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
 
 const DEFAULT_HAND_LIMIT = 5;
-const SITES_PER_PLAYER = 1;
+const SITES_PER_PLAYER = 1; // +1 is added below
 const GENERIC_SUPPLY_PER_TYPE = 9;
 
 export function createInitialState(
@@ -33,7 +33,7 @@ export function createInitialState(
     });
   }
 
-  const sitesPerType = playerCount * SITES_PER_PLAYER;
+  const sitesPerType = playerCount * SITES_PER_PLAYER + 1;
   const sites: Sites = {
     Rubble: sitesPerType,
     Wood: sitesPerType,
