@@ -288,7 +288,7 @@ function canStartBuildingOfMaterial(player: Player, material: MaterialType, site
 }
 
 /** Count how many remaining actions this player has from currentActorIndex onward */
-function countRemainingActions(playerId: number, actors: number[], currentActorIndex: number): number {
+export function countRemainingActions(playerId: number, actors: number[], currentActorIndex: number): number {
   let count = 0;
   for (let i = currentActorIndex; i < actors.length; i++) {
     if (actors[i] === playerId) count++;

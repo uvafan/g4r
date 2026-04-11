@@ -430,6 +430,13 @@ body {
   cursor: not-allowed;
 }
 
+.actions-remaining {
+  color: #ffd700;
+  font-size: 13px;
+  font-weight: bold;
+  align-self: center;
+}
+
 .action-hint {
   color: #aaa;
   font-size: 13px;

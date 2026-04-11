@@ -1,5 +1,5 @@
 import { GameState, GameAction, MaterialType, ActiveRole } from '../game/types';
-import { getAvailableActions, getActivePlayerId } from '../game/engine';
+import { getAvailableActions, getActivePlayerId, countRemainingActions } from '../game/engine';
 import { getCardDef, MATERIAL_COLORS, ROLE_TO_MATERIAL, isJackCard } from '../game/cards';
 
 interface ActionBarProps {
@@ -56,8 +56,22 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
   const selectedIsCraftsmanValid = selectedCardUid !== null && selectedBuildingIndex !== null &&
     actions.craftsmanOptions.some(o => o.cardUid === selectedCardUid && o.buildingIndex === selectedBuildingIndex);
 
+  const remainingActions = phase.type === 'action'
+    ? (() => {
+        const playerId = getActivePlayerId(state);
+        if (playerId === null) return null;
+        return countRemainingActions(playerId, phase.actors, phase.currentActorIndex);
+      })()
+    : null;
+
   return (
     <div className="action-bar">
+      {remainingActions !== null && (
+        <span className="actions-remaining">
+          {remainingActions} {phase.type === 'action' ? phase.ledRole : ''} action{remainingActions !== 1 ? 's' : ''} remaining
+        </span>
+      )}
+
       {actions.canThink && (
         <div className="think-options">
           <span className="think-label">Think:</span>
