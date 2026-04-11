@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
-import { seededRng } from './stateBuilder';
+import { seededRng, makeState, Uids, mkBuilding, updatePlayer, finalize, withActionPhase } from './stateBuilder';
 import { architectAction, legionaryAction, clienteleProduction } from './scenarios';
 
 describe('createInitialState', () => {
@@ -45,7 +45,7 @@ describe('createInitialState', () => {
 });
 
 describe('Think action', () => {
-  it('leader think: all players draw cards', () => {
+  it('leader think: enters thinkRound for followers', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     // Remove some cards from player 0's hand to test draw
     const modState: GameState = {
@@ -54,10 +54,14 @@ describe('Think action', () => {
         i === 0 ? { ...p, hand: p.hand.slice(0, 2) } : p
       ),
     };
-    const newState = gameReducer(modState, { type: 'THINK', option: { kind: 'refresh' } });
+    const afterLeader = gameReducer(modState, { type: 'THINK', option: { kind: 'refresh' } });
     // Player 0 had 2 cards, should draw to 5
-    expect(newState.players[0]!.hand).toHaveLength(5);
-    // Player 1 had 5 cards, should draw 1
+    expect(afterLeader.players[0]!.hand).toHaveLength(5);
+    // Follower hasn't acted yet
+    expect(afterLeader.phase.type).toBe('thinkRound');
+    // Now follower thinks
+    const newState = gameReducer(afterLeader, { type: 'THINK', option: { kind: 'refresh' } });
+    // Player 1 had 5 cards, should draw 1 (refresh at limit)
     expect(newState.players[1]!.hand).toHaveLength(6);
     // Should advance leader
     expect(newState.phase).toEqual({ type: 'lead', leaderId: 1 });
@@ -65,9 +69,11 @@ describe('Think action', () => {
 
   it('think at hand limit draws 1 card', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
-    const newState = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
-    // Both players had 5 cards (at limit), each draws 1
-    expect(newState.players[0]!.hand).toHaveLength(6);
+    const afterLeader = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
+    // Leader had 5 cards (at limit), draws 1
+    expect(afterLeader.players[0]!.hand).toHaveLength(6);
+    // Follower thinks too
+    const newState = gameReducer(afterLeader, { type: 'THINK', option: { kind: 'refresh' } });
     expect(newState.players[1]!.hand).toHaveLength(6);
   });
 });
@@ -895,11 +901,11 @@ describe('Think options', () => {
         i === 0 ? { ...p, hand: p.hand.slice(0, 2) } : p
       ),
     };
-    const newState = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
+    const afterLeader = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
     // Leader draws exactly 1 (not refresh to 5), so hand goes from 2 -> 3
-    expect(newState.players[0]!.hand).toHaveLength(3);
-    // Follower (player 1) at hand limit draws 1 via standard refresh
-    expect(newState.players[1]!.hand).toHaveLength(6);
+    expect(afterLeader.players[0]!.hand).toHaveLength(3);
+    // Follower hasn't acted yet (thinkRound phase)
+    expect(afterLeader.phase.type).toBe('thinkRound');
   });
 
   it('think generic: draws from generic supply', () => {
@@ -932,7 +938,7 @@ describe('Think options', () => {
     expect(newState.genericSupply.Stone).toBe(0);
   });
 
-  it('leader think with generic: followers still get standard refresh', () => {
+  it('leader think with generic: follower gets own think choice', () => {
     let state = createInitialState(2, ['A', 'B'], seededRng(42));
     // Reduce player 1's hand to 3
     state = {
@@ -941,13 +947,17 @@ describe('Think options', () => {
         i === 1 ? { ...p, hand: p.hand.slice(0, 3) } : p
       ),
     };
-    const newState = gameReducer(state, {
+    const afterLeader = gameReducer(state, {
       type: 'THINK',
       option: { kind: 'generic', material: 'Wood' },
     });
     // Leader gets generic Wood
-    expect(newState.genericSupply.Wood).toBe(8);
-    // Follower (player 1) should refresh to 5
+    expect(afterLeader.genericSupply.Wood).toBe(8);
+    // Follower hasn't acted yet
+    expect(afterLeader.phase.type).toBe('thinkRound');
+    // Follower chooses refresh
+    const newState = gameReducer(afterLeader, { type: 'THINK', option: { kind: 'refresh' } });
+    // Follower (player 1) had 3 cards, should refresh to 5
     expect(newState.players[1]!.hand).toHaveLength(5);
   });
 
@@ -1135,18 +1145,24 @@ describe('Generic cards as materials and foundations', () => {
 });
 
 describe('Jack pile', () => {
-  it('initializes with playerCount + 1 jacks', () => {
+  it('initializes with correct jack count per player count', () => {
     const state2 = createInitialState(2, ['A', 'B'], seededRng(42));
-    expect(state2.jackPile).toBe(3);
+    expect(state2.jackPile).toBe(4); // 2+2
 
     const state3 = createInitialState(3, ['A', 'B', 'C'], seededRng(42));
-    expect(state3.jackPile).toBe(4);
+    expect(state3.jackPile).toBe(6); // special case for 3p
+
+    const state4 = createInitialState(4, ['A', 'B', 'C', 'D'], seededRng(42));
+    expect(state4.jackPile).toBe(6); // 4+2
+
+    const state5 = createInitialState(5, ['A', 'B', 'C', 'D', 'E'], seededRng(42));
+    expect(state5.jackPile).toBe(7); // 5+2
   });
 
   it('think jack: draws a Jack card and decrements pile', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     const newState = gameReducer(state, { type: 'THINK', option: { kind: 'jack' } });
-    expect(newState.jackPile).toBe(2);
+    expect(newState.jackPile).toBe(3);
     // Leader gets the jack
     expect(newState.players[0]!.hand).toHaveLength(6);
     const lastCard = newState.players[0]!.hand[5]!;
@@ -2898,5 +2914,155 @@ describe('3-of-a-kind as jack', () => {
     for (const opt of threeOakOptions) {
       expect(opt.extraCardUids).toHaveLength(2);
     }
+  });
+});
+
+describe('Game end - deck exhaustion', () => {
+  it('game ends when deck is empty at end of round', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    // Empty the deck
+    state = { ...state, deck: [] };
+    // Player 0 leads with a think (all players think)
+    const result = gameReducer(state, { type: 'THINK', option: { kind: 'jack' } });
+    // After leader thinks, follower must act; think with jack too
+    const result2 = gameReducer(result, { type: 'THINK', option: { kind: 'jack' } });
+    // Round is over, advanceLeader should detect empty deck
+    expect(result2.phase.type).toBe('gameOver');
+  });
+
+  it('game does not end mid-round when leader empties deck', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    // Leave exactly 1 card in the deck
+    state = { ...state, deck: state.deck.slice(0, 1) };
+    // Player 0 thinks with draw1 (draws the last card)
+    const result = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
+    // Follower still needs to think — game not over yet
+    expect(result.phase.type).toBe('thinkRound');
+    // Follower thinks with jack (deck is empty, can't draw from deck)
+    const result2 = gameReducer(result, { type: 'THINK', option: { kind: 'jack' } });
+    // Now the round ends and deck is empty -> game over
+    expect(result2.phase.type).toBe('gameOver');
+  });
+
+  it('game continues if deck still has cards at end of round', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    // Leave a few cards
+    state = { ...state, deck: state.deck.slice(0, 5) };
+    const result = gameReducer(state, { type: 'THINK', option: { kind: 'jack' } });
+    const result2 = gameReducer(result, { type: 'THINK', option: { kind: 'jack' } });
+    expect(result2.phase.type).toBe('lead');
+  });
+});
+
+describe('Game end - building diversity', () => {
+  // Requires 2 completed buildings of the SAME material at each cost tier (1, 2, 3)
+  function makeDiversityState() {
+    const { state, uids } = makeState(2, ['A', 'B'], 500);
+    // 2x Rubble (cost 1), 2x Brick (cost 2), 1x Stone (cost 3) complete
+    // Plus one incomplete Stone building needing one more material
+    const completedBuildings: Building[] = [
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true),
+    ];
+    // Incomplete Stone building with 2 of 3 materials
+    const incompleteBuilding = mkBuilding(
+      uids.material('Stone'),
+      [uids.material('Stone'), uids.material('Stone')],
+      false,
+    );
+    // Card in hand to add as material
+    const stoneInHand = uids.material('Stone');
+
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [...completedBuildings, incompleteBuilding],
+      hand: [stoneInHand, ...s.players[0]!.hand],
+      influence: 11, // sum of completed building costs: 1+1+2+2+3
+    });
+    return { state: s, stoneCardUid: stoneInHand.uid, incompleteBuildingIndex: 5 };
+  }
+
+  it('triggers game end when player completes 2 buildings of same material at each cost tier', () => {
+    const { state, stoneCardUid, incompleteBuildingIndex } = makeDiversityState();
+    let s = withActionPhase(state, 'Craftsman');
+    s = gameReducer(s, {
+      type: 'CRAFTSMAN_ADD',
+      buildingIndex: incompleteBuildingIndex,
+      cardUid: stoneCardUid,
+    });
+    expect(s.gameEndTriggered).toBe(true);
+  });
+
+  it('game ends at next leader advance after diversity trigger', () => {
+    const { state, stoneCardUid, incompleteBuildingIndex } = makeDiversityState();
+    let s = withActionPhase(state, 'Craftsman', [0]);
+    s = gameReducer(s, {
+      type: 'CRAFTSMAN_ADD',
+      buildingIndex: incompleteBuildingIndex,
+      cardUid: stoneCardUid,
+    });
+    expect(s.phase.type).toBe('gameOver');
+  });
+
+  it('does not trigger when 2 buildings at a cost tier are different materials', () => {
+    const { state: baseState, uids } = makeState(2, ['A', 'B'], 600);
+    // 1 Rubble + 1 Wood (both cost 1 but different materials), 2x Brick, 2x Stone
+    const buildings: Building[] = [
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Wood'), [uids.material('Wood')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true),
+    ];
+    let s = finalize(baseState, uids);
+    s = updatePlayer(s, 0, { buildings, influence: 14 });
+    s = { ...s, phase: { type: 'lead', leaderId: 0 } };
+    const r1 = gameReducer(s, { type: 'THINK', option: { kind: 'jack' } });
+    const r2 = gameReducer(r1, { type: 'THINK', option: { kind: 'jack' } });
+    expect(r2.phase.type).toBe('lead');
+    expect(r2.gameEndTriggered).toBeFalsy();
+  });
+
+  it('does not trigger with only 1 completed building of a material at a cost tier', () => {
+    const { state: baseState, uids } = makeState(2, ['A', 'B'], 600);
+    // 2x Rubble, 2x Brick, but only 1x Stone
+    const buildings: Building[] = [
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true),
+    ];
+    let s = finalize(baseState, uids);
+    s = updatePlayer(s, 0, { buildings, influence: 9 });
+    s = { ...s, phase: { type: 'lead', leaderId: 0 } };
+    const r1 = gameReducer(s, { type: 'THINK', option: { kind: 'jack' } });
+    const r2 = gameReducer(r1, { type: 'THINK', option: { kind: 'jack' } });
+    expect(r2.phase.type).toBe('lead');
+    expect(r2.gameEndTriggered).toBeFalsy();
+  });
+
+  it('does not count incomplete buildings toward diversity', () => {
+    const { state: baseState, uids } = makeState(2, ['A', 'B'], 700);
+    // 2x Rubble, 2x Brick complete, 1x Stone complete + 1x Stone INCOMPLETE
+    const buildings: Building[] = [
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Rubble'), [uids.material('Rubble')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Brick'), [uids.material('Brick'), uids.material('Brick')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true),
+      mkBuilding(uids.material('Stone'), [uids.material('Stone')], false), // incomplete!
+    ];
+    let s = finalize(baseState, uids);
+    s = updatePlayer(s, 0, { buildings, influence: 9 });
+    s = { ...s, phase: { type: 'lead', leaderId: 0 } };
+    const r1 = gameReducer(s, { type: 'THINK', option: { kind: 'jack' } });
+    const r2 = gameReducer(r1, { type: 'THINK', option: { kind: 'jack' } });
+    expect(r2.phase.type).toBe('lead');
+    expect(r2.gameEndTriggered).toBeFalsy();
   });
 });

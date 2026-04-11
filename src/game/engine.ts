@@ -73,7 +73,7 @@ export function createInitialState(
     sites,
     outOfTownSites,
     genericSupply,
-    jackPile: playerCount + 1,
+    jackPile: playerCount === 3 ? 6 : playerCount + 2,
     nextUid,
     phase: { type: 'lead', leaderId: 0 },
     handLimit: DEFAULT_HAND_LIMIT,
@@ -214,11 +214,17 @@ function buildActorsWithClients(
 }
 
 function advanceLeader(state: GameState): GameState {
-  const nextLeader = (state.leadPlayerIdx + 1) % state.playerCount;
-  return {
+  const merged = {
     ...state,
     pool: [...state.pool, ...state.pendingPool],
     pendingPool: [],
+  };
+  if (merged.deck.length === 0 || merged.gameEndTriggered) {
+    return { ...merged, phase: { type: 'gameOver' } };
+  }
+  const nextLeader = (state.leadPlayerIdx + 1) % state.playerCount;
+  return {
+    ...merged,
     leadPlayerIdx: nextLeader,
     phase: { type: 'lead', leaderId: nextLeader },
   };
@@ -302,6 +308,27 @@ function checkBuildingComplete(building: Building): boolean {
   return building.materials.length >= def.cost;
 }
 
+/** Check if a player has 2+ completed buildings of the same material at each cost tier (1, 2, 3) */
+function checkBuildingDiversityEnd(player: Player): boolean {
+  // Count completed buildings per material type
+  const materialCounts = new Map<MaterialType, number>();
+  for (const b of player.buildings) {
+    if (!b.completed) continue;
+    const mat = getCardDef(b.foundationCard).material;
+    materialCounts.set(mat, (materialCounts.get(mat) ?? 0) + 1);
+  }
+  // Need at least one material with 2+ completed buildings at each cost tier
+  let hasCost1 = false, hasCost2 = false, hasCost3 = false;
+  for (const [mat, count] of materialCounts) {
+    if (count < 2) continue;
+    const cost = MATERIAL_VALUE[mat];
+    if (cost === 1) hasCost1 = true;
+    if (cost === 2) hasCost2 = true;
+    if (cost === 3) hasCost3 = true;
+  }
+  return hasCost1 && hasCost2 && hasCost3;
+}
+
 function completeBuildingIfReady(state: GameState, playerId: number, buildingIndex: number): GameState {
   const player = state.players[playerId]!;
   const building = player.buildings[buildingIndex]!;
@@ -315,10 +342,17 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     i === buildingIndex ? { ...b, completed: true } : b
   );
 
-  return updatePlayer(state, playerId, {
+  let newState = updatePlayer(state, playerId, {
     buildings: newBuildings,
     influence: player.influence + def.cost,
   });
+
+  // Check building diversity game end condition
+  if (checkBuildingDiversityEnd(newState.players[playerId]!)) {
+    newState = { ...newState, gameEndTriggered: true };
+  }
+
+  return newState;
 }
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
@@ -331,13 +365,29 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const { option } = action;
 
       if (phase.type === 'lead') {
-        // Leader thinks with chosen option, all followers get standard refresh
-        let newState = applyThinkOption(state, phase.leaderId, option);
-        const followers = getFollowerIds(state, phase.leaderId);
-        for (const fId of followers) {
-          newState = drawCards(newState, fId);
+        // Leader thinks with chosen option, then each follower picks their think option
+        const newState = applyThinkOption(state, phase.leaderId, option);
+        const followers = getFollowerIds(newState, phase.leaderId);
+        if (followers.length === 0) {
+          return advanceLeader(newState);
         }
-        return advanceLeader(newState);
+        return {
+          ...newState,
+          phase: { type: 'thinkRound', leaderId: phase.leaderId, followers, currentFollowerIndex: 0 },
+        };
+      }
+
+      if (phase.type === 'thinkRound') {
+        const followerId = phase.followers[phase.currentFollowerIndex]!;
+        const newState = applyThinkOption(state, followerId, option);
+        const nextIdx = phase.currentFollowerIndex + 1;
+        if (nextIdx >= phase.followers.length) {
+          return advanceLeader(newState);
+        }
+        return {
+          ...newState,
+          phase: { ...phase, currentFollowerIndex: nextIdx },
+        };
       }
 
       if (phase.type === 'follow') {
@@ -809,6 +859,8 @@ export function getActivePlayerId(state: GameState): number | null {
   switch (phase.type) {
     case 'lead':
       return phase.leaderId;
+    case 'thinkRound':
+      return phase.followers[phase.currentFollowerIndex] ?? null;
     case 'follow':
       return phase.followers[phase.currentFollowerIndex] ?? null;
     case 'action':
@@ -869,7 +921,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
   const player = state.players[activeId]!;
   const { phase } = state;
 
-  if (phase.type === 'lead' || phase.type === 'follow') {
+  if (phase.type === 'lead' || phase.type === 'follow' || phase.type === 'thinkRound') {
     result.canThink = true;
     const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
     result.thinkOptions = {

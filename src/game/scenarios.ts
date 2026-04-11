@@ -383,6 +383,55 @@ export function heavyVault(): Scenario {
   };
 }
 
+/** Deck almost empty — game will end in a few rounds from deck exhaustion */
+export function deckAlmostOut(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+
+  const p0Buildings: Building[] = [
+    mkBuilding(uids.card('dock'), [uids.card('crane')], true),
+    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
+  ];
+  const p1Buildings: Building[] = [
+    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
+    mkBuilding(uids.card('latrine'), [uids.card('fountain')], false),
+  ];
+
+  return {
+    name: 'Deck almost out',
+    description: 'Only 3 cards left in deck — game ends when deck empties at end of round',
+    state: {
+      ...finalize(state, uids),
+      deck: state.deck.slice(0, 3),
+      pool: [uids.material('Wood'), uids.material('Brick')],
+      players: state.players.map((p, i) => {
+        if (i === 0) return {
+          ...p, buildings: p0Buildings,
+          clientele: [uids.material('Concrete'), uids.material('Wood')],
+          stockpile: [uids.material('Stone'), uids.material('Marble')],
+          vault: [uids.material('Stone'), uids.material('Brick')],
+          influence: 3,
+        };
+        if (i === 1) return {
+          ...p, buildings: p1Buildings,
+          clientele: [uids.material('Brick')],
+          stockpile: [uids.material('Rubble'), uids.material('Wood')],
+          vault: [uids.material('Marble'), uids.material('Concrete')],
+          influence: 2,
+        };
+        return p;
+      }),
+      sites: {
+        Rubble: state.sites.Rubble - 1,
+        Wood: state.sites.Wood - 1,
+        Brick: state.sites.Brick - 1,
+        Concrete: state.sites.Concrete - 1,
+        Stone: state.sites.Stone - 1,
+        Marble: state.sites.Marble,
+      },
+    },
+  };
+}
+
 /** Game over — final scoring state */
 export function gameOver(): Scenario {
   let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
@@ -428,6 +477,71 @@ export function gameOver(): Scenario {
   };
 }
 
+/** Near building diversity end — player 0 has 2x Rubble, 2x Brick, 1x Stone complete + 1 Stone almost done */
+export function nearDiversityEnd(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+
+  const p0Buildings: Building[] = [
+    // 2x Rubble (cost 1) — same material
+    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
+    mkBuilding(uids.card('bridge'), [uids.card('junkyard')], true),
+    // 2x Brick (cost 2) — same material
+    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
+    mkBuilding(uids.card('stage'), [uids.card('bath'), uids.card('atrium')], true),
+    // 1x Stone (cost 3) complete
+    mkBuilding(uids.card('villa'), [uids.card('sanctuary'), uids.card('library')], true),
+    // 1x Stone (cost 3) needs one more material
+    mkBuilding(uids.card('sewer'), [uids.card('garden'), uids.card('keep')], false),
+  ];
+
+  const p1Buildings: Building[] = [
+    mkBuilding(uids.card('palisade'), [uids.card('market')], true),
+    mkBuilding(uids.card('amphitheatre'), [uids.card('wall')], false),
+  ];
+
+  // Give player 0 a Stone card in hand to complete the sewer
+  const stoneCard = uids.material('Stone');
+  // Also give a Stone in stockpile as alternative completion path via Laborer
+  const stoneStockpile = uids.material('Stone');
+
+  return {
+    name: 'Near diversity end',
+    description: 'Player 0 one Stone material away from 2-2-2 same-type building diversity (game end trigger)',
+    state: {
+      ...finalize(state, uids),
+      pool: [uids.material('Rubble'), uids.material('Wood'), uids.material('Stone')],
+      players: state.players.map((p, i) => {
+        if (i === 0) return {
+          ...p,
+          buildings: p0Buildings,
+          hand: [stoneCard, ...p.hand.slice(0, 4)],
+          stockpile: [stoneStockpile],
+          vault: [uids.material('Stone'), uids.material('Brick')],
+          clientele: [uids.material('Concrete'), uids.material('Wood')],
+          influence: 9, // 1+1+2+2+3 from completed buildings
+        };
+        if (i === 1) return {
+          ...p,
+          buildings: p1Buildings,
+          clientele: [uids.material('Brick')],
+          stockpile: [uids.material('Rubble')],
+          vault: [uids.material('Stone')],
+          influence: 1,
+        };
+        return p;
+      }),
+      sites: {
+        Rubble: state.sites.Rubble - 2,
+        Wood: state.sites.Wood,
+        Brick: state.sites.Brick - 2,
+        Concrete: state.sites.Concrete,
+        Stone: state.sites.Stone - 2,
+        Marble: state.sites.Marble,
+      },
+    },
+  };
+}
+
 export const SCENARIOS: Scenario[] = [
   freshGame(),
   architectAction(),
@@ -442,5 +556,7 @@ export const SCENARIOS: Scenario[] = [
   nearEnd(),
   threePlayerMidGame(),
   heavyVault(),
+  deckAlmostOut(),
+  nearDiversityEnd(),
   gameOver(),
 ];

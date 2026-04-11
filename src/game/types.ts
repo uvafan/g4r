@@ -40,6 +40,7 @@ export type Phase =
   | { type: 'setup' }
   | { type: 'lead'; leaderId: number }
   | { type: 'follow'; leaderId: number; ledRole: ActiveRole; currentFollowerIndex: number; followers: number[]; actors: number[] }
+  | { type: 'thinkRound'; leaderId: number; followers: number[]; currentFollowerIndex: number }
   | { type: 'action'; ledRole: ActiveRole; actors: number[]; currentActorIndex: number }
   | { type: 'legionary_demand'; revealedMaterial: MaterialType; demandees: number[]; currentDemandeeIndex: number; actionActors: number[]; actionCurrentActorIndex: number }
   | { type: 'gameOver' };
@@ -76,6 +77,7 @@ export interface GameState {
   handLimit: number;
   playerCount: number;
   leadPlayerIdx: number;
+  gameEndTriggered?: boolean;
 }
 
 export type ThinkOption =
