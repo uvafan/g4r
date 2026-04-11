@@ -837,6 +837,7 @@ export interface AvailableActions {
   laborerPoolOptions: MaterialType[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
   merchantOptions: MaterialType[];
+  vaultFull: boolean;
   patronOptions: MaterialType[];
   legionaryOptions: { cardUid: number }[];
   legionaryGiveOptions: { cardUid: number }[];
@@ -855,6 +856,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
     laborerPoolOptions: [],
     laborerBuildingOptions: [],
     merchantOptions: [],
+    vaultFull: false,
     patronOptions: [],
     legionaryOptions: [],
     legionaryGiveOptions: [],
@@ -1018,7 +1020,9 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
     if (phase.ledRole === 'Merchant') {
       // Vault capacity is limited by influence
-      if (player.vault.length < player.influence) {
+      if (player.vault.length >= player.influence) {
+        result.vaultFull = true;
+      } else {
         const stockpileMaterialSet = new Set<MaterialType>();
         for (const card of player.stockpile) {
           stockpileMaterialSet.add(getCardDef(card).material);

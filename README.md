@@ -49,6 +49,7 @@ npm run build      # Production build
 - **Card powers** -- All 48 buildings have power text defined but none are mechanically active
 - **Display card text**
 - **Multi-player between people on different computers**
+- **Improve UX**
 - **Turn timers**
 
 ## Project Structure

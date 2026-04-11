@@ -1840,6 +1840,24 @@ describe('Merchant action', () => {
 
     const actions = getAvailableActions(state);
     expect(actions.merchantOptions).toHaveLength(0);
+    expect(actions.vaultFull).toBe(true);
+  });
+
+  it('vaultFull is false when stockpile is empty but vault has room', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, influence: 2, vault: [], stockpile: [] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Merchant', actors: [0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    expect(actions.merchantOptions).toHaveLength(0);
+    expect(actions.vaultFull).toBe(false);
   });
 });
 

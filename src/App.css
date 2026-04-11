@@ -441,6 +441,7 @@ body {
   color: #aaa;
   font-size: 13px;
   font-style: italic;
+  align-self: center;
 }
 
 /* Dev tools */

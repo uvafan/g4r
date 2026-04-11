@@ -359,14 +359,14 @@ export function heavyVault(): Scenario {
           ...p, buildings: p0Buildings,
           clientele: [uids.material('Stone'), uids.material('Stone')],
           stockpile: [uids.material('Marble'), uids.material('Stone'), uids.material('Brick')],
-          vault: [uids.material('Stone'), uids.material('Stone'), uids.material('Marble'), uids.material('Brick'), uids.material('Concrete')],
+          vault: [uids.material('Stone'), uids.material('Stone'), uids.material('Marble')],
           influence: 3,
         };
         if (i === 1) return {
           ...p, buildings: p1Buildings,
           clientele: [uids.material('Stone'), uids.material('Marble'), uids.material('Concrete')],
           stockpile: [uids.material('Stone'), uids.material('Wood')],
-          vault: [uids.material('Marble'), uids.material('Marble'), uids.material('Stone'), uids.material('Brick'), uids.material('Rubble'), uids.material('Wood')],
+          vault: [uids.material('Marble'), uids.material('Marble'), uids.material('Stone'), uids.material('Brick')],
           influence: 4,
         };
         return p;

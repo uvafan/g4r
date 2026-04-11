@@ -221,7 +221,9 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
               ))}
             </div>
           ) : (
-            <span className="action-hint">No materials in stockpile to vault</span>
+            <span className="action-hint">
+              {actions.vaultFull ? 'Vault is full (limited by influence)' : 'No materials in stockpile to vault'}
+            </span>
           )}
         </>
       )}
