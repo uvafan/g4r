@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
-import { seededRng, withActionPhase, updatePlayer } from './stateBuilder';
+import { seededRng } from './stateBuilder';
 import { architectAction, legionaryAction, clienteleProduction } from './scenarios';
 
 describe('createInitialState', () => {
@@ -289,6 +289,224 @@ describe('Architect action', () => {
 
     // Should have started a new building since existing one is completed
     expect(state.players[0]!.buildings.length).toBe(buildingsBefore + 1);
+  });
+});
+
+describe('Out of town sites', () => {
+  it('initializes with 2 out-of-town sites per type', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    expect(state.outOfTownSites.Rubble).toBe(2);
+    expect(state.outOfTownSites.Stone).toBe(2);
+    expect(state.outOfTownSites.Marble).toBe(2);
+  });
+
+  it('uses out-of-town site when normal sites are depleted', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Deplete all Brick normal sites
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+
+    // Give player a Brick card and 2 architect actions
+    const brickCard: Card = { uid: 9000, defId: 'foundry' }; // Brick material
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0], currentActorIndex: 0 },
+    };
+
+    const ootBefore = state.outOfTownSites.Brick;
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+
+    // Out-of-town site should be decremented
+    expect(state.outOfTownSites.Brick).toBe(ootBefore - 1);
+    // Normal sites should still be 0
+    expect(state.sites.Brick).toBe(0);
+    // Building should be marked as out of town
+    const building = state.players[0]!.buildings.find(b => b.foundationCard.uid === brickCard.uid);
+    expect(building?.outOfTown).toBe(true);
+  });
+
+  it('costs 2 actions to start on out-of-town site', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Deplete Brick normal sites, give player 3 architect actions
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0, 0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+
+    // Should have advanced by 2 (from index 0 to index 2)
+    expect(state.phase.type).toBe('action');
+    if (state.phase.type === 'action') {
+      expect(state.phase.currentActorIndex).toBe(2);
+    }
+  });
+
+  it('cannot start out-of-town with only 1 remaining action', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Deplete Brick normal sites, give player only 1 architect action
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0], currentActorIndex: 0 },
+    };
+
+    // Check available actions — should NOT include Brick options
+    const actions = getAvailableActions(state);
+    const brickOption = actions.architectOptions.find(o => o.cardUid === brickCard.uid);
+    expect(brickOption).toBeUndefined();
+
+    // Trying to start should be a no-op
+    const stateBefore = state;
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+    expect(state.players[0]!.buildings.length).toBe(stateBefore.players[0]!.buildings.length);
+  });
+
+  it('prefers normal sites over out-of-town when normal sites exist', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Normal Brick sites exist
+    expect(state.sites.Brick).toBeGreaterThan(0);
+
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0], currentActorIndex: 0 },
+    };
+
+    const sitesBefore = state.sites.Brick;
+    const ootBefore = state.outOfTownSites.Brick;
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+
+    // Normal site should be decremented, out-of-town unchanged
+    expect(state.sites.Brick).toBe(sitesBefore - 1);
+    expect(state.outOfTownSites.Brick).toBe(ootBefore);
+    // Building should NOT be out of town
+    const building = state.players[0]!.buildings.find(b => b.foundationCard.uid === brickCard.uid);
+    expect(building?.outOfTown).toBeUndefined();
+  });
+
+  it('getAvailableActions marks out-of-town options correctly', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Deplete Brick normal sites
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    const brickOption = actions.architectOptions.find(o => o.cardUid === brickCard.uid);
+    expect(brickOption).toBeDefined();
+    expect(brickOption!.outOfTown).toBe(true);
+  });
+
+  it('cannot start building when both normal and out-of-town sites are depleted', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    state = {
+      ...state,
+      sites: { ...state.sites, Brick: 0 },
+      outOfTownSites: { ...state.outOfTownSites, Brick: 0 },
+    };
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0], currentActorIndex: 0 },
+    };
+
+    const actions = getAvailableActions(state);
+    const brickOption = actions.architectOptions.find(o => o.cardUid === brickCard.uid);
+    expect(brickOption).toBeUndefined();
+  });
+
+  it('out-of-town with exactly 2 remaining actions advances to next leader', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+    const brickCard: Card = { uid: 9000, defId: 'foundry' };
+    state = {
+      ...state,
+      nextUid: 9001,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0], currentActorIndex: 0 },
+    };
+
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+
+    // With 2 actions, out-of-town consumes both — should advance to next leader
+    expect(state.phase.type).toBe('lead');
+  });
+
+  it('handles mixed normal and out-of-town in same turn', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+
+    // Deplete Brick but not Wood
+    state = { ...state, sites: { ...state.sites, Brick: 0 } };
+    const woodCard: Card = { uid: 9000, defId: 'crane' }; // Wood
+    const brickCard: Card = { uid: 9001, defId: 'foundry' }; // Brick
+    state = {
+      ...state,
+      nextUid: 9002,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [woodCard, brickCard, ...p.hand] } : p
+      ),
+      phase: { type: 'action', ledRole: 'Architect', actors: [0, 0, 0], currentActorIndex: 0 },
+    };
+
+    // Start wood building (normal site, 1 action)
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: woodCard.uid });
+    expect(state.phase.type).toBe('action');
+    if (state.phase.type === 'action') {
+      expect(state.phase.currentActorIndex).toBe(1);
+    }
+
+    // Now has 2 remaining actions — can start out-of-town Brick
+    state = gameReducer(state, { type: 'ARCHITECT_START', cardUid: brickCard.uid });
+    // Should have consumed 2 more actions (advancing past end = next leader)
+    expect(state.phase.type).toBe('lead');
+
+    // Verify both buildings exist
+    const buildings = state.players[0]!.buildings;
+    const woodBuilding = buildings.find(b => b.foundationCard.uid === woodCard.uid);
+    const brickBuilding = buildings.find(b => b.foundationCard.uid === brickCard.uid);
+    expect(woodBuilding).toBeDefined();
+    expect(woodBuilding!.outOfTown).toBeUndefined();
+    expect(brickBuilding).toBeDefined();
+    expect(brickBuilding!.outOfTown).toBe(true);
   });
 });
 

@@ -236,6 +236,14 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
             </div>
           ))}
         </div>
+        <span className="pool-label" style={{ marginLeft: '1rem' }}>Out of Town</span>
+        <div className="pool-cards">
+          {(Object.keys(state.outOfTownSites) as MaterialType[]).map(mat => (
+            <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat], border: '2px dashed #666' }}>
+              {state.outOfTownSites[mat]} {mat}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="players-section">

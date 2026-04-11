@@ -14,6 +14,7 @@ const defaultState: GameState = {
   pool: [],
   pendingPool: [],
   sites: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 0, Marble: 0 },
+  outOfTownSites: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 0, Marble: 0 },
   genericSupply: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 0, Marble: 0 },
   jackPile: 0,
   nextUid: 0,
@@ -24,13 +25,15 @@ const defaultState: GameState = {
 };
 
 function migrateState(state: GameState): GameState {
-  const needsMigration = state.players.some(
+  let migrated = state;
+
+  const needsPlayerMigration = state.players.some(
     p => !('stockpile' in p) || !('vault' in p) || !('clientele' in p)
   );
-  if (needsMigration) {
-    return {
-      ...state,
-      players: state.players.map((p: any) => ({
+  if (needsPlayerMigration) {
+    migrated = {
+      ...migrated,
+      players: migrated.players.map((p: any) => ({
         ...p,
         stockpile: ('stockpile' in p) ? p.stockpile : [],
         vault: ('vault' in p) ? p.vault : [],
@@ -38,7 +41,15 @@ function migrateState(state: GameState): GameState {
       })) as GameState['players'],
     };
   }
-  return state;
+
+  if (!(migrated as any).outOfTownSites) {
+    migrated = {
+      ...migrated,
+      outOfTownSites: { Rubble: 2, Wood: 2, Brick: 2, Concrete: 2, Stone: 2, Marble: 2 },
+    };
+  }
+
+  return migrated;
 }
 
 function loadState(): GameState {

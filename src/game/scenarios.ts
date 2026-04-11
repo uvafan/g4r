@@ -1,7 +1,7 @@
 import { GameState, Card, Building } from './types';
 import { createInitialState } from './engine';
-import { CARD_DEFS, getCardDef } from './cards';
-import { seededRng, findDefId, Uids, makeState, withActionPhase, updatePlayer, mkBuilding, finalize } from './stateBuilder';
+import { getCardDef } from './cards';
+import { seededRng, makeState, withActionPhase, updatePlayer, mkBuilding, finalize } from './stateBuilder';
 
 export interface Scenario {
   name: string;

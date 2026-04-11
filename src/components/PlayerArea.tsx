@@ -93,6 +93,7 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
                 {building.materials.length}/{materialsNeeded} materials
               </div>
               {building.completed && <div className="building-badge">Complete</div>}
+              {building.outOfTown && <div className="building-badge building-oot">Out of Town</div>}
             </div>
           );
         })}

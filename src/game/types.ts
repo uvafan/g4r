@@ -22,6 +22,7 @@ export interface Building {
   foundationCard: Card;
   materials: Card[];
   completed: boolean;
+  outOfTown?: boolean;
 }
 
 export interface Player {
@@ -67,6 +68,7 @@ export interface GameState {
   pool: Card[];
   pendingPool: Card[];
   sites: Sites;
+  outOfTownSites: Sites;
   genericSupply: GenericSupply;
   jackPile: number;
   nextUid: number;
@@ -87,7 +89,7 @@ export type GameAction =
   | { type: 'LEAD_ROLE'; role: ActiveRole; cardUid: number; extraCardUids?: number[] }
   | { type: 'THINK'; option: ThinkOption }
   | { type: 'FOLLOW_ROLE'; cardUid: number; extraCardUids?: number[] }
-  | { type: 'ARCHITECT_START'; cardUid: number }
+  | { type: 'ARCHITECT_START'; cardUid: number; outOfTown?: boolean }
   | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
   | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }

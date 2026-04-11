@@ -37,12 +37,12 @@ npm run build      # Production build
 - **Jack cards** -- Wild cards that can match any role when leading or following
 - **Clientele production** -- Clients produce bonus actions each turn
 - **VP scoring** -- Full victory point calculation: influence (1 VP per point), vault (material values), merchant bonus (3 VP per category lead), and building bonuses (Statue +3, Wall +1/3 stockpile, Colosseum +1/hand card). Per-material VP breakdown displayed inline on vault chips
+- **Three-of-a-kind as Jack** -- Playing 3 cards of the same role to act as a Jack
 - **Dev tools** -- Copy/import game state JSON, shareable state URLs, loadable test scenarios
 - **120 tests** -- Covering initialization, think, lead/follow, architect, craftsman, laborer, legionary, merchant, patron, jack cards, round lifecycle, available actions, G4R material mapping, and VP scoring
 
 ### Not Yet Implemented
 
-- **Three-of-a-kind as Jack** -- Playing 3 cards of the same role to act as a Jack (G4R rule)
 - **Out-of-town sites** -- Referenced by some card powers but not in engine
 - **Game end conditions** -- No end-game detection (e.g., all sites of a type claimed, deck exhaustion)
 - **Card powers** -- All 48 buildings have power text defined but none are mechanically active

@@ -48,8 +48,10 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
     ? actions.followOptions.find(o => o.cardUid === selectedCardUid && !o.extraCardUids)
     : undefined;
 
-  const selectedIsArchitectValid = selectedCardUid !== null &&
-    actions.architectOptions.some(o => o.cardUid === selectedCardUid);
+  const selectedArchitectOption = selectedCardUid !== null
+    ? actions.architectOptions.find(o => o.cardUid === selectedCardUid)
+    : undefined;
+  const selectedIsArchitectValid = !!selectedArchitectOption;
 
   const selectedIsCraftsmanValid = selectedCardUid !== null && selectedBuildingIndex !== null &&
     actions.craftsmanOptions.some(o => o.cardUid === selectedCardUid && o.buildingIndex === selectedBuildingIndex);
@@ -150,8 +152,8 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
       {phase.type === 'action' && phase.ledRole === 'Architect' && (
         <>
           {selectedIsArchitectValid ? (
-            <button onClick={() => dispatch({ type: 'ARCHITECT_START', cardUid: selectedCardUid! })}>
-              Start Building: {(() => {
+            <button onClick={() => dispatch({ type: 'ARCHITECT_START', cardUid: selectedCardUid!, outOfTown: selectedArchitectOption!.outOfTown })}>
+              Start Building{selectedArchitectOption!.outOfTown ? ' (Out of Town)' : ''}: {(() => {
                 const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
                 return card ? getCardDef(card).name : '?';
               })()}

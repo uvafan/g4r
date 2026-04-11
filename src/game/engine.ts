@@ -6,6 +6,7 @@ import { createDeck, getCardDef, MATERIAL_VALUE, RNG, ROLE_TO_MATERIAL, genericD
 
 const DEFAULT_HAND_LIMIT = 5;
 const SITES_PER_PLAYER = 1; // +1 is added below
+const OUT_OF_TOWN_SITES_PER_TYPE = 2;
 const GENERIC_SUPPLY_PER_TYPE = 9;
 
 export function createInitialState(
@@ -43,6 +44,15 @@ export function createInitialState(
     Marble: sitesPerType,
   };
 
+  const outOfTownSites: Sites = {
+    Rubble: OUT_OF_TOWN_SITES_PER_TYPE,
+    Wood: OUT_OF_TOWN_SITES_PER_TYPE,
+    Brick: OUT_OF_TOWN_SITES_PER_TYPE,
+    Concrete: OUT_OF_TOWN_SITES_PER_TYPE,
+    Stone: OUT_OF_TOWN_SITES_PER_TYPE,
+    Marble: OUT_OF_TOWN_SITES_PER_TYPE,
+  };
+
   const genericSupply: GenericSupply = {
     Rubble: GENERIC_SUPPLY_PER_TYPE,
     Wood: GENERIC_SUPPLY_PER_TYPE,
@@ -61,6 +71,7 @@ export function createInitialState(
     pool: [],
     pendingPool: [],
     sites,
+    outOfTownSites,
     genericSupply,
     jackPile: playerCount + 1,
     nextUid,
@@ -239,8 +250,8 @@ function advanceFollower(state: GameState, phase: Phase & { type: 'follow' }): G
   };
 }
 
-function advanceActor(state: GameState, phase: Phase & { type: 'action' }): GameState {
-  const nextIdx = phase.currentActorIndex + 1;
+function advanceActor(state: GameState, phase: Phase & { type: 'action' }, skip: number = 1): GameState {
+  const nextIdx = phase.currentActorIndex + skip;
   if (nextIdx >= phase.actors.length) {
     return advanceLeader(state);
   }
@@ -258,14 +269,31 @@ export function getNeighborIds(playerId: number, playerCount: number): number[] 
   return [left, right];
 }
 
-function canStartBuildingOfMaterial(player: Player, material: MaterialType, sites: Sites): boolean {
-  // Must have an available site
-  if (sites[material] <= 0) return false;
+function hasAnySiteForMaterial(material: MaterialType, sites: Sites, outOfTownSites: Sites): boolean {
+  return sites[material] > 0 || outOfTownSites[material] > 0;
+}
+
+function requiresOutOfTownSite(material: MaterialType, sites: Sites): boolean {
+  return sites[material] <= 0;
+}
+
+function canStartBuildingOfMaterial(player: Player, material: MaterialType, sites: Sites, outOfTownSites: Sites): boolean {
+  // Must have an available site (normal or out-of-town)
+  if (!hasAnySiteForMaterial(material, sites, outOfTownSites)) return false;
   // Can't have an uncompleted building of the same material type
   const hasUncompleted = player.buildings.some(
     b => !b.completed && getCardDef(b.foundationCard).material === material
   );
   return !hasUncompleted;
+}
+
+/** Count how many remaining actions this player has from currentActorIndex onward */
+function countRemainingActions(playerId: number, actors: number[], currentActorIndex: number): number {
+  let count = 0;
+  for (let i = currentActorIndex; i < actors.length; i++) {
+    if (actors[i] === playerId) count++;
+  }
+  return count;
 }
 
 function checkBuildingComplete(building: Building): boolean {
@@ -475,12 +503,22 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const cardDef = getCardDef(card);
 
       // Validate
-      if (!canStartBuildingOfMaterial(player, cardDef.material, state.sites)) return state;
+      if (!canStartBuildingOfMaterial(player, cardDef.material, state.sites, state.outOfTownSites)) return state;
+
+      // Determine if this must use an out-of-town site
+      const isOutOfTown = requiresOutOfTownSite(cardDef.material, state.sites);
+
+      // Out-of-town requires 2 actions — validate the player has enough remaining
+      if (isOutOfTown) {
+        const remaining = countRemainingActions(actorId, phase.actors, phase.currentActorIndex);
+        if (remaining < 2) return state;
+      }
 
       const newBuilding: Building = {
         foundationCard: card,
         materials: [],
         completed: false,
+        outOfTown: isOutOfTown || undefined,
       };
 
       let newState = updatePlayer(state, actorId, {
@@ -488,20 +526,31 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         buildings: [...player.buildings, newBuilding],
       });
 
-      // Decrement site
-      newState = {
-        ...newState,
-        sites: {
-          ...newState.sites,
-          [cardDef.material]: newState.sites[cardDef.material] - 1,
-        },
-      };
+      // Decrement appropriate site
+      if (isOutOfTown) {
+        newState = {
+          ...newState,
+          outOfTownSites: {
+            ...newState.outOfTownSites,
+            [cardDef.material]: newState.outOfTownSites[cardDef.material] - 1,
+          },
+        };
+      } else {
+        newState = {
+          ...newState,
+          sites: {
+            ...newState.sites,
+            [cardDef.material]: newState.sites[cardDef.material] - 1,
+          },
+        };
+      }
 
       // Check auto-complete for cost-1 buildings
       const buildingIdx = newState.players[actorId]!.buildings.length - 1;
       newState = completeBuildingIfReady(newState, actorId, buildingIdx);
 
-      return advanceActor(newState, phase);
+      // Out-of-town costs 2 actions, normal costs 1
+      return advanceActor(newState, phase, isOutOfTown ? 2 : 1);
     }
 
     case 'CRAFTSMAN_ADD': {
@@ -783,7 +832,7 @@ export interface AvailableActions {
   thinkOptions: ThinkOptions;
   leadOptions: { role: ActiveRole; cardUid: number; extraCardUids?: number[] }[];
   followOptions: { cardUid: number; extraCardUids?: number[] }[];
-  architectOptions: { cardUid: number }[];
+  architectOptions: { cardUid: number; outOfTown?: boolean }[];
   craftsmanOptions: { buildingIndex: number; cardUid: number }[];
   laborerPoolOptions: MaterialType[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
@@ -914,12 +963,15 @@ export function getAvailableActions(state: GameState): AvailableActions {
     result.canSkip = true;
 
     if (phase.ledRole === 'Architect') {
+      const remaining = countRemainingActions(activeId, phase.actors, phase.currentActorIndex);
       for (const card of player.hand) {
         if (isJackCard(card)) continue; // Jacks can't be used as buildings
         const def = getCardDef(card);
-        if (canStartBuildingOfMaterial(player, def.material, state.sites)) {
-          result.architectOptions.push({ cardUid: card.uid });
-        }
+        if (!canStartBuildingOfMaterial(player, def.material, state.sites, state.outOfTownSites)) continue;
+        const outOfTown = requiresOutOfTownSite(def.material, state.sites);
+        // Out-of-town requires 2 remaining actions
+        if (outOfTown && remaining < 2) continue;
+        result.architectOptions.push({ cardUid: card.uid, outOfTown: outOfTown || undefined });
       }
     }
 
