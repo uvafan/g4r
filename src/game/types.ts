@@ -84,9 +84,9 @@ export type ThinkOption =
 
 export type GameAction =
   | { type: 'START_GAME'; playerCount: number; playerNames: string[] }
-  | { type: 'LEAD_ROLE'; role: ActiveRole; cardUid: number }
+  | { type: 'LEAD_ROLE'; role: ActiveRole; cardUid: number; extraCardUids?: number[] }
   | { type: 'THINK'; option: ThinkOption }
-  | { type: 'FOLLOW_ROLE'; cardUid: number }
+  | { type: 'FOLLOW_ROLE'; cardUid: number; extraCardUids?: number[] }
   | { type: 'ARCHITECT_START'; cardUid: number }
   | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }

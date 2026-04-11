@@ -17,16 +17,31 @@ interface GameBoardProps {
 }
 
 export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: GameBoardProps) {
-  const [selectedCardUid, setSelectedCardUid] = useState<number | null>(null);
+  const [selectedCardUids, setSelectedCardUids] = useState<number[]>([]);
   const [selectedBuildingIndex, setSelectedBuildingIndex] = useState<number | null>(null);
   const [selectedPoolMaterials, setSelectedPoolMaterials] = useState<MaterialType[]>([]);
   const [showDevTools, setShowDevTools] = useState(false);
 
   const activePlayerId = getActivePlayerId(state);
 
+  // Derive single-card selection for non-3oak actions
+  const selectedCardUid = selectedCardUids.length === 1 ? selectedCardUids[0]! : null;
+
+  const handleSelectCard = (uid: number, ctrlKey: boolean) => {
+    if (ctrlKey) {
+      setSelectedCardUids(prev =>
+        prev.includes(uid) ? prev.filter(u => u !== uid) : [...prev, uid]
+      );
+    } else {
+      setSelectedCardUids(prev =>
+        prev.length === 1 && prev[0] === uid ? [] : [uid]
+      );
+    }
+  };
+
   // Reset selections on phase/player change
   useEffect(() => {
-    setSelectedCardUid(null);
+    setSelectedCardUids([]);
     setSelectedBuildingIndex(null);
     setSelectedPoolMaterials([]);
   }, [state.phase, activePlayerId]);
@@ -240,9 +255,9 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
               />
               <HandView
                 cards={player.hand}
-                selectedCardUid={isActive ? selectedCardUid : null}
+                selectedCardUids={isActive ? selectedCardUids : []}
                 highlightedCardUids={isActive ? highlightedCardUids : undefined}
-                onSelectCard={isActive ? setSelectedCardUid : undefined}
+                onSelectCard={isActive ? handleSelectCard : undefined}
                 playerName={player.name}
               />
             </div>
@@ -255,6 +270,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
           <ActionBar
             state={state}
             selectedCardUid={selectedCardUid}
+            selectedCardUids={selectedCardUids}
             selectedBuildingIndex={selectedBuildingIndex}
             selectedPoolMaterials={selectedPoolMaterials}
             onPoolMaterialToggle={handlePoolMaterialToggle}

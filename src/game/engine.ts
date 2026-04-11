@@ -330,6 +330,51 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const leader = state.players[phase.leaderId]!;
       const { card, newHand } = removeCardFromHand(leader, action.cardUid);
 
+      // 3-of-a-kind: playing 3 cards of the same material as a wild
+      if (action.extraCardUids && action.extraCardUids.length > 0) {
+        const cardDef = getCardDef(card);
+        let hand = newHand;
+        const extraCards: Card[] = [];
+        for (const uid of action.extraCardUids) {
+          const result = removeCardFromHand({ ...leader, hand } as Player, uid);
+          extraCards.push(result.card);
+          hand = result.newHand;
+        }
+        // Validate all cards are the same material (and non-jack)
+        if (isJackCard(card)) return state;
+        for (const ec of extraCards) {
+          if (isJackCard(ec) || getCardDef(ec).material !== cardDef.material) return state;
+        }
+        let newState = updatePlayer(state, phase.leaderId, { hand });
+        newState = { ...newState, pendingPool: [...newState.pendingPool, card, ...extraCards] };
+
+        const followers = getFollowerIds(state, phase.leaderId);
+        if (followers.length === 0) {
+          const actors = buildActorsWithClients(newState, action.role, phase.leaderId, [phase.leaderId]);
+          return {
+            ...newState,
+            phase: {
+              type: 'action',
+              ledRole: action.role,
+              actors,
+              currentActorIndex: 0,
+            },
+          };
+        }
+
+        return {
+          ...newState,
+          phase: {
+            type: 'follow',
+            leaderId: phase.leaderId,
+            ledRole: action.role,
+            currentFollowerIndex: 0,
+            followers,
+            actors: [],
+          },
+        };
+      }
+
       // Jacks can lead any role; other cards must match material
       if (!isJackCard(card)) {
         const requiredMaterial = ROLE_TO_MATERIAL[action.role];
@@ -379,6 +424,27 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const followerId = phase.followers[phase.currentFollowerIndex]!;
       const follower = state.players[followerId]!;
       const { card, newHand } = removeCardFromHand(follower, action.cardUid);
+
+      // 3-of-a-kind: playing 3 cards of the same material as a wild
+      if (action.extraCardUids && action.extraCardUids.length > 0) {
+        const cardDef = getCardDef(card);
+        let hand = newHand;
+        const extraCards: Card[] = [];
+        for (const uid of action.extraCardUids) {
+          const result = removeCardFromHand({ ...follower, hand } as Player, uid);
+          extraCards.push(result.card);
+          hand = result.newHand;
+        }
+        // Validate all cards are the same material (and non-jack)
+        if (isJackCard(card)) return state;
+        for (const ec of extraCards) {
+          if (isJackCard(ec) || getCardDef(ec).material !== cardDef.material) return state;
+        }
+        let newState = updatePlayer(state, followerId, { hand });
+        newState = { ...newState, pendingPool: [...newState.pendingPool, card, ...extraCards] };
+        const newPhase = { ...phase, actors: [...phase.actors, followerId] };
+        return advanceFollower(newState, newPhase);
+      }
 
       // Jacks can follow any role; other cards must match material
       if (!isJackCard(card)) {
@@ -715,8 +781,8 @@ export interface ThinkOptions {
 export interface AvailableActions {
   canThink: boolean;
   thinkOptions: ThinkOptions;
-  leadOptions: { role: ActiveRole; cardUid: number }[];
-  followOptions: { cardUid: number }[];
+  leadOptions: { role: ActiveRole; cardUid: number; extraCardUids?: number[] }[];
+  followOptions: { cardUid: number; extraCardUids?: number[] }[];
   architectOptions: { cardUid: number }[];
   craftsmanOptions: { buildingIndex: number; cardUid: number }[];
   laborerPoolOptions: MaterialType[];
@@ -763,6 +829,17 @@ export function getAvailableActions(state: GameState): AvailableActions {
     };
   }
 
+  // Group non-jack cards by material for 3-of-a-kind detection
+  const materialGroups: Partial<Record<MaterialType, Card[]>> = {};
+  for (const card of player.hand) {
+    if (isJackCard(card)) continue;
+    const def = getCardDef(card);
+    if (!materialGroups[def.material]) materialGroups[def.material] = [];
+    materialGroups[def.material]!.push(card);
+  }
+
+  const ALL_ROLES: ActiveRole[] = ['Architect', 'Craftsman', 'Laborer', 'Legionary', 'Merchant', 'Patron'];
+
   if (phase.type === 'lead') {
     for (const card of player.hand) {
       if (isJackCard(card)) {
@@ -795,6 +872,18 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
       }
     }
+
+    // 3-of-a-kind: 3 cards of the same material can lead any role
+    for (const cards of Object.values(materialGroups)) {
+      if (!cards || cards.length < 3) continue;
+      for (const card of cards) {
+        const others = cards.filter(c => c.uid !== card.uid).slice(0, 2);
+        const extraCardUids = others.map(c => c.uid);
+        for (const role of ALL_ROLES) {
+          result.leadOptions.push({ role, cardUid: card.uid, extraCardUids });
+        }
+      }
+    }
   }
 
   if (phase.type === 'follow') {
@@ -807,6 +896,16 @@ export function getAvailableActions(state: GameState): AvailableActions {
         if (def.material === requiredMaterial) {
           result.followOptions.push({ cardUid: card.uid });
         }
+      }
+    }
+
+    // 3-of-a-kind: 3 cards of the same material can follow any role
+    for (const cards of Object.values(materialGroups)) {
+      if (!cards || cards.length < 3) continue;
+      for (const card of cards) {
+        const others = cards.filter(c => c.uid !== card.uid).slice(0, 2);
+        const extraCardUids = others.map(c => c.uid);
+        result.followOptions.push({ cardUid: card.uid, extraCardUids });
       }
     }
   }

@@ -3,13 +3,13 @@ import { CardView } from './CardView';
 
 interface HandViewProps {
   cards: Card[];
-  selectedCardUid: number | null;
+  selectedCardUids: number[];
   highlightedCardUids?: Set<number>;
-  onSelectCard?: (uid: number) => void;
+  onSelectCard?: (uid: number, ctrlKey: boolean) => void;
   playerName: string;
 }
 
-export function HandView({ cards, selectedCardUid, highlightedCardUids, onSelectCard, playerName }: HandViewProps) {
+export function HandView({ cards, selectedCardUids, highlightedCardUids, onSelectCard, playerName }: HandViewProps) {
   return (
     <div className="hand-view">
       <div className="hand-label">{playerName}'s Hand ({cards.length}):</div>
@@ -18,9 +18,9 @@ export function HandView({ cards, selectedCardUid, highlightedCardUids, onSelect
           <CardView
             key={card.uid}
             card={card}
-            selected={card.uid === selectedCardUid}
+            selected={selectedCardUids.includes(card.uid)}
             highlighted={highlightedCardUids?.has(card.uid)}
-            onClick={onSelectCard ? () => onSelectCard(card.uid) : undefined}
+            onClick={onSelectCard ? (e) => onSelectCard(card.uid, e.ctrlKey || e.metaKey) : undefined}
           />
         ))}
       </div>

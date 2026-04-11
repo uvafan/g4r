@@ -43,9 +43,12 @@ npm run build      # Production build
 ### Not Yet Implemented
 
 - **Three-of-a-kind as Jack** -- Playing 3 cards of the same role to act as a Jack (G4R rule)
-- **Card powers** -- All 48 buildings have power text defined but none are mechanically active
-- **Game end conditions** -- No end-game detection (e.g., all sites of a type claimed, deck exhaustion)
 - **Out-of-town sites** -- Referenced by some card powers but not in engine
+- **Game end conditions** -- No end-game detection (e.g., all sites of a type claimed, deck exhaustion)
+- **Card powers** -- All 48 buildings have power text defined but none are mechanically active
+- **Display card text**
+- **Multi-player between people on different computers**
+- **Turn timers**
 
 ## Project Structure
 

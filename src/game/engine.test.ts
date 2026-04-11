@@ -2,14 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
-
-// Seeded RNG for deterministic tests
-function seededRng(seed: number) {
-  return () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-}
+import { seededRng, withActionPhase, updatePlayer } from './stateBuilder';
+import { architectAction, legionaryAction, clienteleProduction } from './scenarios';
 
 describe('createInitialState', () => {
   it('creates correct number of players with 5 cards each', () => {
@@ -198,20 +192,7 @@ describe('Lead and Follow', () => {
 
 describe('Architect action', () => {
   function getActionState(): GameState {
-    // Create a state already in action phase for Architect
-    const rng = seededRng(100);
-    const state = createInitialState(2, ['A', 'B'], rng);
-
-    // Manually set to action phase
-    return {
-      ...state,
-      phase: {
-        type: 'action',
-        ledRole: 'Architect',
-        actors: [0],
-        currentActorIndex: 0,
-      },
-    };
+    return architectAction().state;
   }
 
   it('starts a building and decrements site', () => {
@@ -1645,29 +1626,8 @@ describe('Merchant action', () => {
 });
 
 describe('Legionary action', () => {
-  function makeLegionaryState(playerCount: number = 2): GameState {
-    const rng = seededRng(42);
-    let state = createInitialState(playerCount, ['A', 'B', 'C', 'D'].slice(0, playerCount), rng);
-
-    // Give player 0 a Wood card to reveal
-    const woodCard: Card = { uid: state.nextUid, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
-    // Give player 1 a Wood card to be demanded
-    const woodCard2: Card = { uid: state.nextUid + 1, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
-    // Put a Wood card in the pool
-    const woodPoolCard: Card = { uid: state.nextUid + 2, defId: CARD_DEFS.find(d => d.material === 'Wood')!.id };
-
-    state = {
-      ...state,
-      nextUid: state.nextUid + 3,
-      pool: [woodPoolCard],
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, hand: [woodCard, ...p.hand] };
-        if (i === 1) return { ...p, hand: [woodCard2, ...p.hand] };
-        return p;
-      }),
-      phase: { type: 'action', ledRole: 'Legionary', actors: [0], currentActorIndex: 0 },
-    };
-    return state;
+  function makeLegionaryState(): GameState {
+    return legionaryAction().state;
   }
 
   it('Brick maps to Legionary role', () => {
@@ -2012,19 +1972,7 @@ describe('getNeighborIds', () => {
 
 describe('Clientele action production', () => {
   function setupWithClients(): GameState {
-    // Create a 2-player state with player 0 having an Architect client
-    const rng = seededRng(42);
-    let state = createInitialState(2, ['A', 'B'], rng);
-
-    // Give player 0 a Concrete card in clientele (= Architect client)
-    const clientCard: Card = { uid: 8000, defId: 'road' }; // Concrete card
-    state = {
-      ...state,
-      players: state.players.map((p, i) =>
-        i === 0 ? { ...p, clientele: [clientCard], influence: 3 } : p
-      ),
-    };
-    return state;
+    return clienteleProduction().state;
   }
 
   it('getClientCountForRole counts matching clients', () => {
@@ -2475,5 +2423,244 @@ describe('calculateVP', () => {
     expect(vp.merchantBonus).toBe(3);
     expect(vp.buildingBonus).toBe(3);
     expect(vp.total).toBe(10);
+  });
+});
+
+describe('3-of-a-kind as jack', () => {
+  // Helper: create a state where player 0 has 3 Brick cards in hand during lead phase
+  function stateWith3Brick(): GameState {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    const brickCards: Card[] = [
+      { uid: 9001, defId: 'foundry' },
+      { uid: 9002, defId: 'school' },
+      { uid: 9003, defId: 'shrine' },
+    ];
+    return {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [...brickCards, ...p.hand.slice(0, 2)] } : p
+      ),
+    };
+  }
+
+  it('getAvailableActions: 3 cards of same material produce lead options for all roles', () => {
+    const state = stateWith3Brick();
+    const actions = getAvailableActions(state);
+
+    // Should have 3oak lead options for each of the 6 roles for each of the 3 brick cards
+    const threeOakOptions = actions.leadOptions.filter(o => o.extraCardUids);
+    expect(threeOakOptions.length).toBeGreaterThanOrEqual(6 * 3);
+
+    // For card 9001, should have all 6 roles available as 3oak
+    const optionsForCard = threeOakOptions.filter(o => o.cardUid === 9001);
+    const roles = new Set(optionsForCard.map(o => o.role));
+    expect(roles).toEqual(new Set(['Architect', 'Craftsman', 'Laborer', 'Legionary', 'Merchant', 'Patron']));
+
+    // Each 3oak option should have exactly 2 extra card UIDs
+    for (const opt of optionsForCard) {
+      expect(opt.extraCardUids).toHaveLength(2);
+    }
+  });
+
+  it('getAvailableActions: 2 cards of same material do NOT produce 3oak lead options', () => {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    // Give player 0 exactly 2 brick cards
+    const twoState: GameState = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [
+          { uid: 9001, defId: 'foundry' },
+          { uid: 9002, defId: 'school' },
+          { uid: 9003, defId: 'road' }, // Concrete, not Brick
+        ] } : p
+      ),
+    };
+    const actions = getAvailableActions(twoState);
+    const threeOakOptions = actions.leadOptions.filter(o => o.extraCardUids);
+    expect(threeOakOptions).toHaveLength(0);
+  });
+
+  it('leading with 3-of-a-kind removes all 3 cards and puts them in pending pool', () => {
+    const state = stateWith3Brick();
+    const handBefore = state.players[0]!.hand.length;
+
+    const newState = gameReducer(state, {
+      type: 'LEAD_ROLE',
+      role: 'Merchant', // Not the natural role for Brick (Legionary)
+      cardUid: 9001,
+      extraCardUids: [9002, 9003],
+    });
+
+    expect(newState.players[0]!.hand).toHaveLength(handBefore - 3);
+    expect(newState.pendingPool).toHaveLength(3);
+    expect(newState.pendingPool.some(c => c.uid === 9001)).toBe(true);
+    expect(newState.pendingPool.some(c => c.uid === 9002)).toBe(true);
+    expect(newState.pendingPool.some(c => c.uid === 9003)).toBe(true);
+    expect(newState.phase.type).toBe('follow');
+    if (newState.phase.type === 'follow') {
+      expect(newState.phase.ledRole).toBe('Merchant');
+    }
+  });
+
+  it('3-of-a-kind can lead any role (not just natural role)', () => {
+    const state = stateWith3Brick();
+    // Brick natural role is Legionary, but 3oak should allow Patron
+    const newState = gameReducer(state, {
+      type: 'LEAD_ROLE',
+      role: 'Patron',
+      cardUid: 9001,
+      extraCardUids: [9002, 9003],
+    });
+
+    expect(newState.phase.type).toBe('follow');
+    if (newState.phase.type === 'follow') {
+      expect(newState.phase.ledRole).toBe('Patron');
+    }
+  });
+
+  it('3-of-a-kind rejects mismatched materials', () => {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    const mixedState: GameState = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [
+          { uid: 9001, defId: 'foundry' },  // Brick
+          { uid: 9002, defId: 'school' },    // Brick
+          { uid: 9003, defId: 'road' },      // Concrete — mismatch!
+        ] } : p
+      ),
+    };
+
+    const newState = gameReducer(mixedState, {
+      type: 'LEAD_ROLE',
+      role: 'Patron',
+      cardUid: 9001,
+      extraCardUids: [9002, 9003],
+    });
+
+    // Should be rejected — state unchanged
+    expect(newState.phase.type).toBe('lead');
+    expect(newState.players[0]!.hand).toHaveLength(3);
+  });
+
+  it('3-of-a-kind rejects jacks as part of the trio', () => {
+    const rng = seededRng(42);
+    const state = createInitialState(2, ['A', 'B'], rng);
+    const jackState: GameState = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [
+          { uid: 9001, defId: 'foundry' },  // Brick
+          { uid: 9002, defId: 'school' },    // Brick
+          { uid: 9003, defId: 'jack' },      // Jack — not valid for 3oak
+        ] } : p
+      ),
+    };
+
+    const newState = gameReducer(jackState, {
+      type: 'LEAD_ROLE',
+      role: 'Patron',
+      cardUid: 9001,
+      extraCardUids: [9002, 9003],
+    });
+
+    // Should be rejected
+    expect(newState.phase.type).toBe('lead');
+  });
+
+  it('following with 3-of-a-kind works for non-matching material', () => {
+    // Set up: player 0 leads Merchant. Player 1 has 3 Brick cards (not Stone).
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    // Give player 0 a Stone card to lead Merchant
+    const stoneCard: Card = { uid: 8000, defId: 'sanctuary' };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [stoneCard, ...p.hand.slice(0, 4)] } : p
+      ),
+    };
+
+    // Lead Merchant
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Merchant', cardUid: 8000 });
+    expect(state.phase.type).toBe('follow');
+
+    // Give player 1 three Brick cards
+    const brickCards: Card[] = [
+      { uid: 9001, defId: 'foundry' },
+      { uid: 9002, defId: 'school' },
+      { uid: 9003, defId: 'shrine' },
+    ];
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 1 ? { ...p, hand: [...brickCards, ...p.hand.slice(0, 2)] } : p
+      ),
+    };
+
+    const p1HandBefore = state.players[1]!.hand.length;
+
+    // Follow Merchant with 3-of-a-kind Brick
+    const newState = gameReducer(state, {
+      type: 'FOLLOW_ROLE',
+      cardUid: 9001,
+      extraCardUids: [9002, 9003],
+    });
+
+    expect(newState.players[1]!.hand).toHaveLength(p1HandBefore - 3);
+    expect(newState.pendingPool.some(c => c.uid === 9001)).toBe(true);
+    expect(newState.pendingPool.some(c => c.uid === 9002)).toBe(true);
+    expect(newState.pendingPool.some(c => c.uid === 9003)).toBe(true);
+    // Player 1 should be an actor
+    expect(newState.phase.type).toBe('action');
+    if (newState.phase.type === 'action') {
+      expect(newState.phase.actors).toContain(1);
+    }
+  });
+
+  it('getAvailableActions: 3oak follow options appear for non-matching material', () => {
+    const rng = seededRng(42);
+    let state = createInitialState(2, ['A', 'B'], rng);
+
+    // Give player 0 a Stone card and lead Merchant
+    const stoneCard: Card = { uid: 8000, defId: 'sanctuary' };
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, hand: [stoneCard, ...p.hand.slice(0, 4)] } : p
+      ),
+    };
+    state = gameReducer(state, { type: 'LEAD_ROLE', role: 'Merchant', cardUid: 8000 });
+
+    // Give player 1 three Brick cards (not Stone)
+    state = {
+      ...state,
+      players: state.players.map((p, i) =>
+        i === 1 ? { ...p, hand: [
+          { uid: 9001, defId: 'foundry' },
+          { uid: 9002, defId: 'school' },
+          { uid: 9003, defId: 'shrine' },
+          { uid: 9004, defId: 'road' }, // Concrete card, not part of 3oak
+          { uid: 9005, defId: 'crane' }, // Wood card, not part of 3oak
+        ] } : p
+      ),
+    };
+
+    const actions = getAvailableActions(state);
+    // Should have no normal follow options (no Stone cards)
+    const normalOptions = actions.followOptions.filter(o => !o.extraCardUids);
+    expect(normalOptions).toHaveLength(0);
+
+    // Should have 3oak follow options for each of the 3 Brick cards
+    const threeOakOptions = actions.followOptions.filter(o => o.extraCardUids);
+    expect(threeOakOptions).toHaveLength(3);
+
+    for (const opt of threeOakOptions) {
+      expect(opt.extraCardUids).toHaveLength(2);
+    }
   });
 });

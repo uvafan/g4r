@@ -6,7 +6,7 @@ interface CardViewProps {
   faceUp?: boolean;
   selected?: boolean;
   highlighted?: boolean;
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
   compact?: boolean;
 }
 

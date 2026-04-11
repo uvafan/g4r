@@ -1,29 +1,52 @@
-import { GameState, GameAction, MaterialType } from '../game/types';
-import { getAvailableActions } from '../game/engine';
-import { getCardDef, MATERIAL_COLORS, ROLE_TO_MATERIAL } from '../game/cards';
+import { GameState, GameAction, MaterialType, ActiveRole } from '../game/types';
+import { getAvailableActions, getActivePlayerId } from '../game/engine';
+import { getCardDef, MATERIAL_COLORS, ROLE_TO_MATERIAL, isJackCard } from '../game/cards';
 
 interface ActionBarProps {
   state: GameState;
   selectedCardUid: number | null;
+  selectedCardUids: number[];
   selectedBuildingIndex: number | null;
   selectedPoolMaterials: MaterialType[];
   onPoolMaterialToggle: (material: MaterialType) => void;
   dispatch: (action: GameAction) => void;
 }
 
-export function ActionBar({ state, selectedCardUid, selectedBuildingIndex, selectedPoolMaterials, onPoolMaterialToggle, dispatch }: ActionBarProps) {
+const ALL_ROLES: ActiveRole[] = ['Architect', 'Craftsman', 'Laborer', 'Legionary', 'Merchant', 'Patron'];
+
+export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBuildingIndex, selectedPoolMaterials, onPoolMaterialToggle, dispatch }: ActionBarProps) {
   const actions = getAvailableActions(state);
   const { phase } = state;
   const { thinkOptions } = actions;
 
+  // Check if user has ctrl-selected exactly 3 same-material non-Jack cards
+  const threeOakFromSelection = (() => {
+    if (selectedCardUids.length !== 3) return null;
+    const playerId = getActivePlayerId(state);
+    if (playerId === null) return null;
+    const player = state.players[playerId]!;
+    const cards = selectedCardUids.map(uid => player.hand.find(c => c.uid === uid));
+    if (cards.some(c => !c || isJackCard(c))) return null;
+    const materials = cards.map(c => getCardDef(c!).material);
+    if (materials[0] !== materials[1] || materials[1] !== materials[2]) return null;
+    return {
+      cardUid: selectedCardUids[0]!,
+      extraCardUids: [selectedCardUids[1]!, selectedCardUids[2]!],
+    };
+  })();
+
   const selectedIsLeadable = selectedCardUid !== null &&
     actions.leadOptions.some(o => o.cardUid === selectedCardUid);
-  const selectedLeadRoles = selectedCardUid !== null
-    ? [...new Set(actions.leadOptions.filter(o => o.cardUid === selectedCardUid).map(o => o.role))]
+  const normalLeadOptions = selectedCardUid !== null
+    ? actions.leadOptions.filter(o => o.cardUid === selectedCardUid && !o.extraCardUids)
     : [];
+  const normalLeadRoles = [...new Set(normalLeadOptions.map(o => o.role))];
 
   const selectedIsFollowable = selectedCardUid !== null &&
     actions.followOptions.some(o => o.cardUid === selectedCardUid);
+  const normalFollowOption = selectedCardUid !== null
+    ? actions.followOptions.find(o => o.cardUid === selectedCardUid && !o.extraCardUids)
+    : undefined;
 
   const selectedIsArchitectValid = selectedCardUid !== null &&
     actions.architectOptions.some(o => o.cardUid === selectedCardUid);
@@ -77,28 +100,47 @@ export function ActionBar({ state, selectedCardUid, selectedBuildingIndex, selec
       )}
 
       {phase.type === 'lead' && (
-        selectedIsLeadable && selectedLeadRoles.length > 0
-          ? selectedLeadRoles.map(role => (
+        threeOakFromSelection
+          ? ALL_ROLES.map(role => (
               <button
-                key={role}
-                onClick={() => selectedCardUid !== null && dispatch({ type: 'LEAD_ROLE', role, cardUid: selectedCardUid })}
+                key={`3oak-${role}`}
+                onClick={() => dispatch({ type: 'LEAD_ROLE', role, cardUid: threeOakFromSelection.cardUid, extraCardUids: threeOakFromSelection.extraCardUids })}
               >
-                Lead {role} (with selected card)
+                Lead {role} (3 of a kind)
               </button>
             ))
-          : <button disabled>Lead</button>
+          : selectedIsLeadable
+            ? normalLeadRoles.map(role => (
+                <button
+                  key={role}
+                  onClick={() => selectedCardUid !== null && dispatch({ type: 'LEAD_ROLE', role, cardUid: selectedCardUid })}
+                >
+                  Lead {role}
+                </button>
+              ))
+            : <span className="action-hint">
+                {actions.leadOptions.length > 0
+                  ? 'Select a card to lead (Ctrl+click 3 of same material for wild)'
+                  : 'No cards to lead with'}
+              </span>
       )}
 
       {phase.type === 'follow' && (
         <>
-          {selectedIsFollowable ? (
-            <button onClick={() => dispatch({ type: 'FOLLOW_ROLE', cardUid: selectedCardUid! })}>
-              Follow {phase.ledRole} (with selected card)
+          {threeOakFromSelection ? (
+            <button onClick={() => dispatch({ type: 'FOLLOW_ROLE', cardUid: threeOakFromSelection.cardUid, extraCardUids: threeOakFromSelection.extraCardUids })}>
+              Follow {phase.ledRole} (3 of a kind)
             </button>
+          ) : selectedIsFollowable ? (
+            normalFollowOption && (
+              <button onClick={() => dispatch({ type: 'FOLLOW_ROLE', cardUid: selectedCardUid! })}>
+                Follow {phase.ledRole}
+              </button>
+            )
           ) : (
             <span className="action-hint">
               {actions.followOptions.length > 0
-                ? `Select a ${ROLE_TO_MATERIAL[phase.ledRole]} card to follow`
+                ? `Select a ${ROLE_TO_MATERIAL[phase.ledRole]} card to follow (Ctrl+click 3 of same material for wild)`
                 : `No matching cards to follow ${phase.ledRole}`}
             </span>
           )}
