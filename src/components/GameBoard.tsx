@@ -231,16 +231,9 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
         <span className="pool-label" style={{ marginLeft: '1rem' }}>Sites</span>
         <div className="pool-cards">
           {(Object.keys(state.sites) as MaterialType[]).map(mat => (
-            <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
-              {state.sites[mat]} {mat}
-            </div>
-          ))}
-        </div>
-        <span className="pool-label" style={{ marginLeft: '1rem' }}>Out of Town</span>
-        <div className="pool-cards">
-          {(Object.keys(state.outOfTownSites) as MaterialType[]).map(mat => (
-            <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat], border: '2px dashed #666' }}>
-              {state.outOfTownSites[mat]} {mat}
+            <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat], display: 'flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.2 }}>
+              <span>{state.sites[mat]} {mat}</span>
+              <span style={{ fontSize: '0.75em', opacity: 0.8 }}>({state.outOfTownSites[mat]} OoT)</span>
             </div>
           ))}
         </div>
