@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GameState, GameAction } from './game/types';
 import { createInitialState, gameReducer } from './game/engine';
+import { SCENARIOS } from './game/scenarios';
 import { SetupScreen } from './components/SetupScreen';
 import { GameBoard } from './components/GameBoard';
 
@@ -41,6 +42,16 @@ function migrateState(state: GameState): GameState {
 }
 
 function loadState(): GameState {
+  // Check URL hash for encoded state
+  if (window.location.hash.startsWith('#state=')) {
+    try {
+      const encoded = window.location.hash.slice('#state='.length);
+      const json = decodeURIComponent(atob(encoded));
+      // Clear the hash so it doesn't reload on refresh
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return migrateState(JSON.parse(json));
+    } catch { /* fall through */ }
+  }
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return migrateState(JSON.parse(saved));
@@ -56,6 +67,20 @@ function loadHistory(): GameState[] {
   return [];
 }
 
+// Extend window for console access
+declare global {
+  interface Window {
+    g4r: {
+      loadState: (state: GameState) => void;
+      getState: () => GameState;
+      exportState: () => string;
+      importState: (json: string) => void;
+      loadScenario: (nameOrIndex: string | number) => void;
+      scenarios: () => void;
+    };
+  }
+}
+
 export default function App() {
   const [state, setState] = useState(loadState);
   const historyRef = useRef<GameState[]>(loadHistory());
@@ -64,6 +89,45 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     localStorage.setItem(HISTORY_KEY, JSON.stringify(historyRef.current));
   }, [state]);
+
+  const loadGameState = useCallback((newState: GameState) => {
+    historyRef.current = [];
+    setState(migrateState(newState));
+  }, []);
+
+  // Expose console API
+  useEffect(() => {
+    window.g4r = {
+      loadState: (s: GameState) => loadGameState(s),
+      getState: () => state,
+      exportState: () => JSON.stringify(state, null, 2),
+      importState: (json: string) => loadGameState(JSON.parse(json)),
+      loadScenario: (nameOrIndex: string | number) => {
+        if (typeof nameOrIndex === 'number') {
+          const scenario = SCENARIOS[nameOrIndex];
+          if (!scenario) {
+            console.error(`No scenario at index ${nameOrIndex}. Use g4r.scenarios() to list.`);
+            return;
+          }
+          loadGameState(scenario.state);
+          console.log(`Loaded: ${scenario.name}`);
+          return;
+        }
+        const scenario = SCENARIOS.find(s =>
+          s.name.toLowerCase().includes(nameOrIndex.toLowerCase())
+        );
+        if (!scenario) {
+          console.error(`No scenario matching "${nameOrIndex}". Use g4r.scenarios() to list.`);
+          return;
+        }
+        loadGameState(scenario.state);
+        console.log(`Loaded: ${scenario.name}`);
+      },
+      scenarios: () => {
+        console.table(SCENARIOS.map((s, i) => ({ index: i, name: s.name, description: s.description })));
+      },
+    };
+  }, [state, loadGameState]);
 
   const dispatch = useCallback((action: GameAction) => {
     setState(prev => {
@@ -94,6 +158,7 @@ export default function App() {
         onStart={(count, names) =>
           dispatch({ type: 'START_GAME', playerCount: count, playerNames: names })
         }
+        onLoadState={loadGameState}
       />
     );
   }
@@ -104,6 +169,7 @@ export default function App() {
       dispatch={dispatch}
       onUndo={historyRef.current.length > 0 ? undo : undefined}
       onNewGame={newGame}
+      onLoadState={loadGameState}
     />
   );
 }

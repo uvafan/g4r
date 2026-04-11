@@ -1,10 +1,13 @@
 import { useState } from 'react';
+import { GameState } from '../game/types';
+import { SCENARIOS } from '../game/scenarios';
 
 interface SetupScreenProps {
   onStart: (playerCount: number, names: string[]) => void;
+  onLoadState: (state: GameState) => void;
 }
 
-export function SetupScreen({ onStart }: SetupScreenProps) {
+export function SetupScreen({ onStart, onLoadState }: SetupScreenProps) {
   const [playerCount, setPlayerCount] = useState(2);
   const [names, setNames] = useState(['Player 1', 'Player 2', 'Player 3', 'Player 4']);
 
@@ -38,6 +41,39 @@ export function SetupScreen({ onStart }: SetupScreenProps) {
       <button onClick={() => onStart(playerCount, names.slice(0, playerCount))}>
         Start Game
       </button>
+      <div style={{ marginTop: '24px', borderTop: '1px solid #444', paddingTop: '16px' }}>
+        <label style={{ display: 'block', marginBottom: '8px', fontSize: '0.9rem', color: '#aaa' }}>
+          Load Scenario / Import State
+        </label>
+        <select
+          className="scenario-select"
+          value=""
+          onChange={e => {
+            const idx = parseInt(e.target.value);
+            if (!isNaN(idx)) onLoadState(SCENARIOS[idx]!.state);
+          }}
+          style={{ width: '100%', marginBottom: '8px' }}
+        >
+          <option value="" disabled>Load Scenario...</option>
+          {SCENARIOS.map((s, i) => (
+            <option key={i} value={i}>{s.name} — {s.description}</option>
+          ))}
+        </select>
+        <button
+          style={{ width: '100%' }}
+          onClick={async () => {
+            try {
+              const json = await navigator.clipboard.readText();
+              onLoadState(JSON.parse(json));
+            } catch {
+              const json = prompt('Paste game state JSON:');
+              if (json) onLoadState(JSON.parse(json));
+            }
+          }}
+        >
+          Import from Clipboard
+        </button>
+      </div>
     </div>
   );
 }

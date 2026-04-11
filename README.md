@@ -36,14 +36,15 @@ npm run build      # Production build
 - **UI** -- Dark-themed board with color-coded cards, phase indicator, player areas, hand view, and context-aware action bar with hints
 - **Jack cards** -- Wild cards that can match any role when leading or following
 - **Clientele production** -- Clients produce bonus actions each turn
-- **109 tests** -- Covering initialization, think, lead/follow, architect, craftsman, laborer, legionary, merchant, patron, jack cards, round lifecycle, available actions, and the G4R material mapping
+- **VP scoring** -- Full victory point calculation: influence (1 VP per point), vault (material values), merchant bonus (3 VP per category lead), and building bonuses (Statue +3, Wall +1/3 stockpile, Colosseum +1/hand card). Per-material VP breakdown displayed inline on vault chips
+- **Dev tools** -- Copy/import game state JSON, shareable state URLs, loadable test scenarios
+- **120 tests** -- Covering initialization, think, lead/follow, architect, craftsman, laborer, legionary, merchant, patron, jack cards, round lifecycle, available actions, G4R material mapping, and VP scoring
 
 ### Not Yet Implemented
 
 - **Three-of-a-kind as Jack** -- Playing 3 cards of the same role to act as a Jack (G4R rule)
 - **Card powers** -- All 48 buildings have power text defined but none are mechanically active
 - **Game end conditions** -- No end-game detection (e.g., all sites of a type claimed, deck exhaustion)
-- **Scoring/victory** -- Influence is tracked but final VP calculation not implemented
 - **Out-of-town sites** -- Referenced by some card powers but not in engine
 
 ## Project Structure
@@ -53,8 +54,9 @@ src/
   game/
     types.ts        # Game state interfaces and type definitions
     cards.ts        # 48 card definitions, material/role mappings, deck creation
-    engine.ts       # Game reducer, action handling, phase transitions
-    engine.test.ts  # Test suite (109 tests)
+    engine.ts       # Game reducer, action handling, phase transitions, VP scoring
+    engine.test.ts  # Test suite (120 tests)
+    scenarios.ts    # Predefined game states for dev/testing
   components/
     SetupScreen.tsx   # Player count and name entry
     GameBoard.tsx     # Main game container

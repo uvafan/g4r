@@ -1,37 +1,44 @@
-import { Player, MaterialType, Role } from '../game/types';
+import { Player, MaterialType, Role, GameState } from '../game/types';
 import { getCardDef, MATERIAL_COLORS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL } from '../game/cards';
+import { calculateVP } from '../game/engine';
 import { CardView } from './CardView';
 
 interface PlayerAreaProps {
   player: Player;
+  gameState: GameState;
   isActive: boolean;
   selectedBuildingIndex?: number;
   highlightedBuildingIndices?: Set<number>;
   onSelectBuilding?: (index: number) => void;
 }
 
-export function PlayerArea({ player, isActive, selectedBuildingIndex, highlightedBuildingIndices, onSelectBuilding }: PlayerAreaProps) {
+export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex, highlightedBuildingIndices, onSelectBuilding }: PlayerAreaProps) {
+  const vp = calculateVP(gameState, player.id);
+
   return (
     <div className={`player-area ${isActive ? 'player-active' : ''}`}>
       <div className="player-header">
         <strong>{player.name}</strong>
+        <span className="vp-total" title={
+          `Influence: ${vp.influence}` +
+          ` | Vault: ${vp.vault}` +
+          ` | Merchant Bonus: ${vp.merchantBonus}` +
+          (vp.merchantBonusCategories.length > 0 ? ` (${vp.merchantBonusCategories.join(', ')})` : '') +
+          (vp.buildingBonus > 0 ? ` | Building Bonus: ${vp.buildingBonus}` : '')
+        }>{vp.total} VP</span>
         <span>Influence: {player.influence} | Hand: {player.hand.length}</span>
       </div>
       {(player.vault.length > 0 || player.influence > 0) && (
         <div className="stockpile-row">
           <span className="stockpile-label">Vault ({player.vault.length}/{player.influence}):</span>
-          {(() => {
-            const counts: Partial<Record<MaterialType, number>> = {};
-            for (const card of player.vault) {
-              const mat = getCardDef(card).material;
-              counts[mat] = (counts[mat] ?? 0) + 1;
-            }
-            return (Object.entries(counts) as [MaterialType, number][]).map(([mat, count]) => (
-              <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
-                {count} {mat}
-              </div>
-            ));
-          })()}
+          {(Object.entries(vp.vaultByMaterial) as [MaterialType, { count: number; baseValue: number; merchantBonus: number }][]).map(([mat, info]) => (
+            <div key={mat} className="vault-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
+              <span>{info.count} {mat}</span>
+              <span className="vault-vp">
+                {info.baseValue}vp{info.merchantBonus > 0 && <span className="vault-bonus">+{info.merchantBonus}</span>}
+              </span>
+            </div>
+          ))}
         </div>
       )}
       {(player.clientele.length > 0 || player.influence > 0) && (

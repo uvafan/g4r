@@ -169,8 +169,36 @@ body {
 .player-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
   font-size: 14px;
+}
+
+.vp-total {
+  font-weight: bold;
+  color: #ffd700;
+  cursor: help;
+}
+
+.vault-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vault-vp {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.vault-bonus {
+  color: #ffd700;
+  font-weight: 700;
 }
 
 .buildings-row {
@@ -406,4 +434,29 @@ body {
   color: #aaa;
   font-size: 13px;
   font-style: italic;
+}
+
+/* Dev tools */
+.dev-tools {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #0d1b2a;
+  border-bottom: 1px solid #333;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.scenario-select {
+  padding: 5px 8px;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.scenario-select:hover {
+  background: #444;
 }

@@ -2,7 +2,7 @@ import {
   GameState, GameAction, Player, Phase, Sites, Building,
   Card, MaterialType, ActiveRole, GenericSupply, ThinkOption,
 } from './types';
-import { createDeck, getCardDef, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
+import { createDeck, getCardDef, MATERIAL_VALUE, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
 
 const DEFAULT_HAND_LIMIT = 5;
 const SITES_PER_PLAYER = 1; // +1 is added below
@@ -907,4 +907,93 @@ export function getAvailableActions(state: GameState): AvailableActions {
   }
 
   return result;
+}
+
+// --- Victory Point Scoring ---
+
+const ALL_MATERIALS: MaterialType[] = ['Rubble', 'Wood', 'Brick', 'Concrete', 'Stone', 'Marble'];
+
+export interface VaultMaterialVP {
+  count: number;
+  baseValue: number;      // count * material value
+  merchantBonus: number;  // 3 if winning this category, 0 otherwise
+}
+
+export interface VPBreakdown {
+  influence: number;
+  vault: number;
+  vaultByMaterial: Partial<Record<MaterialType, VaultMaterialVP>>;
+  merchantBonus: number;
+  merchantBonusCategories: MaterialType[];
+  buildingBonus: number;
+  total: number;
+}
+
+function hasCompletedBuilding(player: Player, buildingId: string): boolean {
+  return player.buildings.some(
+    b => b.completed && getCardDef(b.foundationCard).id === buildingId
+  );
+}
+
+export function calculateVP(state: GameState, playerId: number): VPBreakdown {
+  const player = state.players[playerId]!;
+
+  // 1. Influence = 1 VP per influence point
+  const influence = player.influence;
+
+  // 2. Vault = sum of material values, and 3. Merchant bonus per category
+  const vaultCounts: Partial<Record<MaterialType, number>> = {};
+  for (const card of player.vault) {
+    const mat = getCardDef(card).material;
+    vaultCounts[mat] = (vaultCounts[mat] ?? 0) + 1;
+  }
+
+  let vault = 0;
+  const merchantBonusCategories: MaterialType[] = [];
+  const vaultByMaterial: Partial<Record<MaterialType, VaultMaterialVP>> = {};
+
+  for (const mat of ALL_MATERIALS) {
+    const myCount = vaultCounts[mat] ?? 0;
+    if (myCount === 0) continue;
+
+    const baseValue = myCount * MATERIAL_VALUE[mat];
+    vault += baseValue;
+
+    let isBest = true;
+    for (const other of state.players) {
+      if (other.id === playerId) continue;
+      const otherCount = other.vault.filter(c => getCardDef(c).material === mat).length;
+      if (otherCount >= myCount) {
+        isBest = false;
+        break;
+      }
+    }
+
+    const bonus = isBest ? 3 : 0;
+    if (isBest) merchantBonusCategories.push(mat);
+
+    vaultByMaterial[mat] = { count: myCount, baseValue, merchantBonus: bonus };
+  }
+
+  const merchantBonus = merchantBonusCategories.length * 3;
+
+  // 4. Building bonuses
+  let buildingBonus = 0;
+  if (hasCompletedBuilding(player, 'statue')) buildingBonus += 3;
+  if (hasCompletedBuilding(player, 'wall')) {
+    buildingBonus += Math.floor(player.stockpile.length / 3);
+  }
+  if (hasCompletedBuilding(player, 'colosseum')) {
+    buildingBonus += player.hand.length;
+  }
+
+  return {
+    influence,
+    vault,
+    vaultByMaterial,
+    merchantBonus,
+    merchantBonusCategories,
+    buildingBonus,
+    total: influence + vault + merchantBonus + buildingBonus,
+  };
 }

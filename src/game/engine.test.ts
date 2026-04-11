@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
 
@@ -2265,5 +2265,215 @@ describe('Clientele action production', () => {
       expect(state.players[0]!.clientele).toHaveLength(3);
       expect(state.phase.type).toBe('lead'); // turn ends
     }
+  });
+});
+
+describe('calculateVP', () => {
+  it('returns 0 VP for a fresh game', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const vp = calculateVP(state, 0);
+    expect(vp.influence).toBe(0);
+    expect(vp.vault).toBe(0);
+    expect(vp.merchantBonus).toBe(0);
+    expect(vp.buildingBonus).toBe(0);
+    expect(vp.total).toBe(0);
+  });
+
+  it('counts influence from completed buildings', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    // Give player a completed cost-2 building
+    const brickCard: Card = { uid: state.nextUid, defId: 'foundry' };
+    const mat1: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Brick') };
+    const mat2: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Brick') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 3,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          influence: 2,
+          buildings: [{ foundationCard: brickCard, materials: [mat1, mat2], completed: true }],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.influence).toBe(2);
+    expect(vp.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('counts vault material values', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const rubble: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Rubble') }; // value 1
+    const stone: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Stone') }; // value 3
+    const brick: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Brick') }; // value 2
+    state = {
+      ...state,
+      nextUid: state.nextUid + 3,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, vault: [rubble, stone, brick] } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.vault).toBe(6); // 1 + 3 + 2
+  });
+
+  it('awards merchant bonus for winning a category', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const wood1: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    const wood2: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, vault: [wood1, wood2] } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.merchantBonus).toBe(3);
+    expect(vp.merchantBonusCategories).toEqual(['Wood']);
+  });
+
+  it('no merchant bonus on tie', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const wood0: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    const wood1: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, vault: [wood0] } :
+        i === 1 ? { ...p, vault: [wood1] } : p
+      ),
+    };
+    const vp0 = calculateVP(state, 0);
+    const vp1 = calculateVP(state, 1);
+    expect(vp0.merchantBonus).toBe(0);
+    expect(vp1.merchantBonus).toBe(0);
+  });
+
+  it('awards multiple merchant bonuses', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const wood: Card = { uid: state.nextUid, defId: genericDefIdForMaterial('Wood') };
+    const marble: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Marble') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? { ...p, vault: [wood, marble] } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.merchantBonus).toBe(6); // 2 categories * 3 VP
+    expect(vp.merchantBonusCategories).toContain('Wood');
+    expect(vp.merchantBonusCategories).toContain('Marble');
+  });
+
+  it('statue gives +3 VP', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const statueCard: Card = { uid: state.nextUid, defId: 'statue' };
+    const mat: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 2,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          influence: 1,
+          buildings: [{ foundationCard: statueCard, materials: [mat], completed: true }],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.buildingBonus).toBe(3);
+  });
+
+  it('wall gives 1 VP per 3 stockpile materials', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const wallCard: Card = { uid: state.nextUid, defId: 'wall' };
+    const mat1: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Concrete') };
+    const mat2: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Concrete') };
+    const sp1: Card = { uid: state.nextUid + 3, defId: genericDefIdForMaterial('Rubble') };
+    const sp2: Card = { uid: state.nextUid + 4, defId: genericDefIdForMaterial('Wood') };
+    const sp3: Card = { uid: state.nextUid + 5, defId: genericDefIdForMaterial('Brick') };
+    const sp4: Card = { uid: state.nextUid + 6, defId: genericDefIdForMaterial('Stone') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 7,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          influence: 2,
+          buildings: [{ foundationCard: wallCard, materials: [mat1, mat2], completed: true }],
+          stockpile: [sp1, sp2, sp3, sp4],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.buildingBonus).toBe(1); // floor(4/3) = 1
+  });
+
+  it('colosseum gives +1 VP per card in hand', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const colosseumCard: Card = { uid: state.nextUid, defId: 'colosseum' };
+    const mat1: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Stone') };
+    const mat2: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Stone') };
+    const mat3: Card = { uid: state.nextUid + 3, defId: genericDefIdForMaterial('Stone') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 4,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          influence: 3,
+          buildings: [{ foundationCard: colosseumCard, materials: [mat1, mat2, mat3], completed: true }],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    // Player has 5 cards in hand from initial deal
+    expect(vp.buildingBonus).toBe(state.players[0]!.hand.length);
+  });
+
+  it('incomplete buildings give no bonus', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const statueCard: Card = { uid: state.nextUid, defId: 'statue' };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 1,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          buildings: [{ foundationCard: statueCard, materials: [], completed: false }],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    expect(vp.buildingBonus).toBe(0);
+  });
+
+  it('total combines all VP sources', () => {
+    let state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const statueCard: Card = { uid: state.nextUid, defId: 'statue' };
+    const woodMat: Card = { uid: state.nextUid + 1, defId: genericDefIdForMaterial('Wood') };
+    const vaultStone: Card = { uid: state.nextUid + 2, defId: genericDefIdForMaterial('Stone') };
+    state = {
+      ...state,
+      nextUid: state.nextUid + 3,
+      players: state.players.map((p, i) =>
+        i === 0 ? {
+          ...p,
+          influence: 1,
+          buildings: [{ foundationCard: statueCard, materials: [woodMat], completed: true }],
+          vault: [vaultStone],
+        } : p
+      ),
+    };
+    const vp = calculateVP(state, 0);
+    // influence=1, vault=3 (Stone), merchant bonus=3 (Stone category), building=3 (Statue)
+    expect(vp.influence).toBe(1);
+    expect(vp.vault).toBe(3);
+    expect(vp.merchantBonus).toBe(3);
+    expect(vp.buildingBonus).toBe(3);
+    expect(vp.total).toBe(10);
   });
 });

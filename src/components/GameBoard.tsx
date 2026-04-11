@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { GameState, GameAction, MaterialType } from '../game/types';
 import { getActivePlayerId, getAvailableActions } from '../game/engine';
 import { getCardDef, MATERIAL_COLORS, isJackCard } from '../game/cards';
+import { SCENARIOS } from '../game/scenarios';
 import { PhaseIndicator } from './PhaseIndicator';
 import { PlayerArea } from './PlayerArea';
 import { HandView } from './HandView';
@@ -12,12 +13,14 @@ interface GameBoardProps {
   dispatch: (action: GameAction) => void;
   onUndo?: () => void;
   onNewGame: () => void;
+  onLoadState: (state: GameState) => void;
 }
 
-export function GameBoard({ state, dispatch, onUndo, onNewGame }: GameBoardProps) {
+export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: GameBoardProps) {
   const [selectedCardUid, setSelectedCardUid] = useState<number | null>(null);
   const [selectedBuildingIndex, setSelectedBuildingIndex] = useState<number | null>(null);
   const [selectedPoolMaterials, setSelectedPoolMaterials] = useState<MaterialType[]>([]);
+  const [showDevTools, setShowDevTools] = useState(false);
 
   const activePlayerId = getActivePlayerId(state);
 
@@ -113,8 +116,53 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame }: GameBoardProps
         <div className="top-bar-buttons">
           {onUndo && <button className="top-btn" onClick={onUndo}>Undo</button>}
           <button className="top-btn" onClick={onNewGame}>New Game</button>
+          <button className="top-btn" onClick={() => setShowDevTools(v => !v)}>
+            {showDevTools ? 'Hide Dev' : 'Dev'}
+          </button>
         </div>
       </div>
+
+      {showDevTools && (
+        <div className="dev-tools">
+          <button className="top-btn" onClick={() => {
+            const json = JSON.stringify(state, null, 2);
+            navigator.clipboard.writeText(json);
+          }}>
+            Copy State
+          </button>
+          <button className="top-btn" onClick={() => {
+            const encoded = btoa(encodeURIComponent(JSON.stringify(state)));
+            const url = `${window.location.origin}${window.location.pathname}#state=${encoded}`;
+            navigator.clipboard.writeText(url);
+          }}>
+            Copy URL
+          </button>
+          <button className="top-btn" onClick={async () => {
+            try {
+              const json = await navigator.clipboard.readText();
+              onLoadState(JSON.parse(json));
+            } catch {
+              const json = prompt('Paste game state JSON:');
+              if (json) onLoadState(JSON.parse(json));
+            }
+          }}>
+            Import State
+          </button>
+          <select
+            className="scenario-select"
+            value=""
+            onChange={e => {
+              const idx = parseInt(e.target.value);
+              if (!isNaN(idx)) onLoadState(SCENARIOS[idx]!.state);
+            }}
+          >
+            <option value="" disabled>Load Scenario...</option>
+            {SCENARIOS.map((s, i) => (
+              <option key={i} value={i}>{s.name} — {s.description}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {state.pool.length > 0 && (
         <div className="pool-section">
@@ -182,6 +230,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame }: GameBoardProps
             <div key={player.id} className="player-column">
               <PlayerArea
                 player={player}
+                gameState={state}
                 isActive={isActive}
                 selectedBuildingIndex={isActive ? selectedBuildingIndex ?? undefined : undefined}
                 highlightedBuildingIndices={isActive ? highlightedBuildingIndices : undefined}
