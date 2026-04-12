@@ -48,18 +48,31 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
     setCraneFirstCardUid(null);
   }, [state.phase, activePlayerId]);
 
-  // Auto-select building when only one matches the selected card during Craftsman
+  // Auto-select building when only one matches the selected card during Craftsman or Quarry
   useEffect(() => {
     if (selectedCardUid === null) return;
-    const { phase } = state;
-    if (phase.type !== 'action' || phase.ledRole !== 'Craftsman') return;
     const actions = getAvailableActions(state);
-    const matchingBuildings = actions.craftsmanOptions
-      .filter(o => o.cardUid === selectedCardUid)
-      .map(o => o.buildingIndex);
-    const uniqueBuildings = [...new Set(matchingBuildings)];
-    if (uniqueBuildings.length === 1) {
-      setSelectedBuildingIndex(uniqueBuildings[0]!);
+
+    // Normal Craftsman
+    if (state.phase.type === 'action' && (state.phase as any).ledRole === 'Craftsman' && !actions.pendingAbilityKind) {
+      const matchingBuildings = actions.craftsmanOptions
+        .filter(o => o.cardUid === selectedCardUid)
+        .map(o => o.buildingIndex);
+      const uniqueBuildings = [...new Set(matchingBuildings)];
+      if (uniqueBuildings.length === 1) {
+        setSelectedBuildingIndex(uniqueBuildings[0]!);
+      }
+    }
+
+    // Quarry pending ability
+    if (actions.pendingAbilityKind === 'quarry') {
+      const matchingBuildings = actions.quarryCraftsmanOptions
+        .filter(o => o.cardUid === selectedCardUid && !o.fromPool)
+        .map(o => o.buildingIndex);
+      const uniqueBuildings = [...new Set(matchingBuildings)];
+      if (uniqueBuildings.length === 1) {
+        setSelectedBuildingIndex(uniqueBuildings[0]!);
+      }
     }
   }, [selectedCardUid, state]);
 
@@ -115,6 +128,16 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
           buildingIndices.add(o.buildingIndex);
         }
       }
+    }
+
+    // Pending abilities highlighting
+    if (actions.pendingAbilityKind === 'quarry') {
+      for (const o of actions.quarryCraftsmanOptions) {
+        if (!o.fromPool) cardUids.add(o.cardUid);
+        buildingIndices.add(o.buildingIndex);
+      }
+    } else if (actions.pendingAbilityKind === 'encampment') {
+      for (const o of actions.encampmentOptions) cardUids.add(o.cardUid);
     }
 
     return { highlightedCardUids: cardUids, highlightedBuildingIndices: buildingIndices };

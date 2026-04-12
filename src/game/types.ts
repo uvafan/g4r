@@ -41,7 +41,12 @@ export type Phase =
   | { type: 'lead'; leaderId: number }
   | { type: 'follow'; leaderId: number; ledRole: ActiveRole; currentFollowerIndex: number; followers: number[]; actors: number[] }
   | { type: 'thinkRound'; leaderId: number; followers: number[]; currentFollowerIndex: number }
-  | { type: 'action'; ledRole: ActiveRole; actors: number[]; currentActorIndex: number }
+  | { type: 'action'; ledRole: ActiveRole; actors: number[]; currentActorIndex: number;
+      pendingAbilities?: Array<
+        | { kind: 'quarry' }
+        | { kind: 'encampment'; material: MaterialType }
+        | { kind: 'junkyard' }
+      > }
   | { type: 'legionary_demand'; revealedMaterial: MaterialType; demandees: number[]; currentDemandeeIndex: number; actionActors: number[]; actionCurrentActorIndex: number }
   | { type: 'gameOver' };
 
@@ -94,12 +99,15 @@ export type GameAction =
   | { type: 'THINK'; option: ThinkOption }
   | { type: 'FOLLOW_ROLE'; cardUid: number; extraCardUids?: number[] }
   | { type: 'ARCHITECT_START'; cardUid: number; outOfTown?: boolean; craneCardUid?: number; craneOutOfTown?: boolean }
-  | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
+  | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number; fromPool?: boolean }
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
   | { type: 'LABORER_HAND_TO_STOCKPILE'; cardUid: number }
-  | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }
+  | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number; fromPool?: boolean }
   | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType; fromPool?: boolean }
-  | { type: 'LEGIONARY_REVEAL'; cardUid: number }
+  | { type: 'LEGIONARY_REVEAL'; cardUid: number; bridge?: boolean }
   | { type: 'LEGIONARY_GIVE'; cardUid: number }
   | { type: 'PATRON_HIRE'; material: MaterialType }
+  | { type: 'QUARRY_CRAFTSMAN'; buildingIndex: number; cardUid: number; fromPool?: boolean }
+  | { type: 'ENCAMPMENT_START'; cardUid: number; outOfTown?: boolean }
+  | { type: 'JUNKYARD_ACTIVATE'; keepJacks: boolean }
   | { type: 'SKIP_ACTION' };

@@ -1,6 +1,6 @@
 import { Player, MaterialType, Role, GameState } from '../game/types';
 import { getCardDef, MATERIAL_COLORS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL } from '../game/cards';
-import { calculateVP } from '../game/engine';
+import { calculateVP, getRequiredMaterials } from '../game/engine';
 import { CardView } from './CardView';
 
 interface PlayerAreaProps {
@@ -86,7 +86,7 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
         {player.buildings.length === 0 && <span className="no-buildings">No buildings</span>}
         {player.buildings.map((building, idx) => {
           const def = getCardDef(building.foundationCard);
-          const materialsNeeded = def.cost;
+          const materialsNeeded = getRequiredMaterials(player, building);
           const isSelected = selectedBuildingIndex === idx;
           return (
             <div

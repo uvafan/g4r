@@ -82,6 +82,15 @@ export function createInitialState(
   };
 }
 
+/** Get required materials for a building, accounting for Vat */
+export function getRequiredMaterials(player: Player, building: Building): number {
+  const def = getCardDef(building.foundationCard);
+  if (def.material === 'Concrete' && hasCompletedBuilding(player, 'vat')) {
+    return 1;
+  }
+  return def.cost;
+}
+
 export function getEffectiveHandLimit(state: GameState, playerId: number): number {
   let limit = state.handLimit;
   const player = state.players[playerId]!;
@@ -193,7 +202,22 @@ function getFollowerIds(state: GameState, leaderId: number): number[] {
 
 export function getClientCountForRole(player: Player, role: ActiveRole): number {
   const material = ROLE_TO_MATERIAL[role];
-  return player.clientele.filter(c => getCardDef(c).material === material).length;
+  let count = player.clientele.filter(c => getCardDef(c).material === material).length;
+
+  // Fortress: every pair of 2 clients of the same type also counts as a Legionary client
+  if (role === 'Legionary' && hasCompletedBuilding(player, 'fortress')) {
+    const materialCounts: Partial<Record<MaterialType, number>> = {};
+    for (const c of player.clientele) {
+      const mat = getCardDef(c).material;
+      materialCounts[mat] = (materialCounts[mat] ?? 0) + 1;
+    }
+    for (const mat of Object.keys(materialCounts) as MaterialType[]) {
+      if (mat === 'Brick') continue; // Already counted as Legionary
+      count += Math.floor(materialCounts[mat]! / 2);
+    }
+  }
+
+  return count;
 }
 
 function buildActorsWithClients(
@@ -265,6 +289,27 @@ function advanceFollower(state: GameState, phase: Phase & { type: 'follow' }): G
   };
 }
 
+/** Check if the action phase has pending abilities — if so, don't advance */
+function hasPendingAbilities(state: GameState): boolean {
+  if (state.phase.type !== 'action') return false;
+  const p = state.phase.pendingAbilities;
+  return !!p && p.length > 0;
+}
+
+/** Remove the first pending ability of the given kind; advance actor if none remain */
+function resolvePendingAbility(state: GameState, resolvedKind: string): GameState {
+  if (state.phase.type !== 'action') return state;
+  const phase = state.phase;
+  const pending = phase.pendingAbilities ?? [];
+  const idx = pending.findIndex(a => a.kind === resolvedKind);
+  const newPending = idx >= 0 ? [...pending.slice(0, idx), ...pending.slice(idx + 1)] : pending;
+
+  if (newPending.length > 0) {
+    return { ...state, phase: { ...phase, pendingAbilities: newPending } };
+  }
+  return advanceActor({ ...state, phase: { ...phase, pendingAbilities: undefined } }, phase);
+}
+
 function advanceActor(state: GameState, phase: Phase & { type: 'action' }, skip: number = 1): GameState {
   const nextIdx = phase.currentActorIndex + skip;
   if (nextIdx >= phase.actors.length) {
@@ -327,12 +372,6 @@ export function countRemainingActions(playerId: number, actors: number[], curren
   return count;
 }
 
-function checkBuildingComplete(building: Building): boolean {
-  const def = getCardDef(building.foundationCard);
-  // Cost is the number of materials needed (not counting the foundation)
-  return building.materials.length >= def.cost;
-}
-
 /** Check if a player has 2+ completed buildings of the same material at each cost tier (1, 2, 3) */
 function checkBuildingDiversityEnd(player: Player): boolean {
   // Count completed buildings per material type
@@ -358,11 +397,18 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
   const player = state.players[playerId]!;
   const building = player.buildings[buildingIndex]!;
 
-  if (building.completed || !checkBuildingComplete(building)) {
-    return state;
-  }
+  if (building.completed) return state;
 
   const def = getCardDef(building.foundationCard);
+
+  // Vat: Concrete buildings need only 1 material
+  let requiredMaterials = def.cost;
+  if (def.material === 'Concrete' && hasCompletedBuilding(player, 'vat')) {
+    requiredMaterials = 1;
+  }
+
+  if (building.materials.length < requiredMaterials) return state;
+
   const newBuildings = player.buildings.map((b, i) =>
     i === buildingIndex ? { ...b, completed: true } : b
   );
@@ -377,9 +423,79 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     newState = applyMarketCompletion(newState, playerId);
   }
 
+  // Vat: upon completion, retroactively complete any Concrete buildings with 1+ material
+  if (def.id === 'vat') {
+    const p = newState.players[playerId]!;
+    let extraInfluence = 0;
+    const retroBuildings = p.buildings.map(b => {
+      if (b.completed) return b;
+      const bDef = getCardDef(b.foundationCard);
+      if (bDef.material === 'Concrete' && b.materials.length >= 1) {
+        extraInfluence += bDef.cost;
+        return { ...b, completed: true };
+      }
+      return b;
+    });
+    if (extraInfluence > 0) {
+      newState = updatePlayer(newState, playerId, {
+        buildings: retroBuildings,
+        influence: p.influence + extraInfluence,
+      });
+    }
+  }
+
   // Check building diversity game end condition
   if (checkBuildingDiversityEnd(newState.players[playerId]!)) {
     newState = { ...newState, gameEndTriggered: true };
+  }
+
+  // Collect triggered abilities
+  const pendingAbilities: Array<
+    | { kind: 'quarry' }
+    | { kind: 'encampment'; material: MaterialType }
+    | { kind: 'junkyard' }
+  > = [];
+
+  const updatedPlayer = newState.players[playerId]!;
+
+  // Junkyard: upon completion of Junkyard itself
+  if (def.id === 'junkyard' && updatedPlayer.hand.length > 0) {
+    pendingAbilities.push({ kind: 'junkyard' });
+  }
+
+  // Quarry: after finishing any structure, may take a Craftsman action
+  if (hasCompletedBuilding(updatedPlayer, 'quarry')) {
+    const canCraftsman = updatedPlayer.buildings.some(b => {
+      if (b.completed) return false;
+      const bMat = getCardDef(b.foundationCard).material;
+      return updatedPlayer.hand.some(c => !isJackCard(c) && getCardDef(c).material === bMat) ||
+             (hasCompletedBuilding(updatedPlayer, 'scriptorium') &&
+              newState.pool.some(c => getCardDef(c).material === bMat));
+    });
+    if (canCraftsman) {
+      pendingAbilities.push({ kind: 'quarry' });
+    }
+  }
+
+  // Encampment: after finishing a building, may start one of the same type
+  if (hasCompletedBuilding(updatedPlayer, 'encampment')) {
+    const canStart =
+      canStartBuildingOfMaterial(updatedPlayer, def.material, newState.sites, newState.outOfTownSites) &&
+      updatedPlayer.hand.some(c => !isJackCard(c) && getCardDef(c).material === def.material);
+    if (canStart) {
+      pendingAbilities.push({ kind: 'encampment', material: def.material });
+    }
+  }
+
+  if (pendingAbilities.length > 0 && newState.phase.type === 'action') {
+    const existing = (newState.phase as Phase & { type: 'action' }).pendingAbilities ?? [];
+    newState = {
+      ...newState,
+      phase: {
+        ...newState.phase,
+        pendingAbilities: [...existing, ...pendingAbilities],
+      },
+    };
   }
 
   return newState;
@@ -679,6 +795,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       }
 
       // Out-of-town costs 2 actions, normal costs 1
+      if (hasPendingAbilities(newState)) return newState;
       return advanceActor(newState, phase, isOutOfTown ? 2 : 1);
     }
 
@@ -690,6 +807,23 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const player = state.players[actorId]!;
       const building = player.buildings[action.buildingIndex];
       if (!building || building.completed) return state;
+
+      // Scriptorium: take matching material from pool instead of hand
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'scriptorium')) return state;
+        const buildingDef = getCardDef(building.foundationCard);
+        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === buildingDef.material);
+        if (poolIdx === -1) return state;
+        const poolCard = state.pool[poolIdx]!;
+        const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+        const newBuildings = player.buildings.map((b, i) =>
+          i === action.buildingIndex ? { ...b, materials: [...b.materials, poolCard] } : b
+        );
+        let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
+        newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        if (hasPendingAbilities(newState)) return newState;
+        return advanceActor(newState, phase);
+      }
 
       const { card, newHand } = removeCardFromHand(player, action.cardUid);
       const cardDef = getCardDef(card);
@@ -710,6 +844,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       });
 
       newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      if (hasPendingAbilities(newState)) return newState;
       return advanceActor(newState, phase);
     }
 
@@ -774,6 +909,22 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const buildingDef = getCardDef(building.foundationCard);
       if (action.material !== buildingDef.material) return state;
 
+      // Scriptorium: take matching material from pool instead of stockpile
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'scriptorium')) return state;
+        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
+        if (poolIdx === -1) return state;
+        const poolCard = state.pool[poolIdx]!;
+        const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+        const newBuildings = player.buildings.map((b, i) =>
+          i === action.buildingIndex ? { ...b, materials: [...b.materials, poolCard] } : b
+        );
+        let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
+        newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        if (hasPendingAbilities(newState)) return newState;
+        return advanceActor(newState, phase);
+      }
+
       const stockpileIdx = player.stockpile.findIndex(
         c => getCardDef(c).material === action.material
       );
@@ -796,6 +947,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       });
 
       newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      if (hasPendingAbilities(newState)) return newState;
       return advanceActor(newState, phase);
     }
 
@@ -854,19 +1006,67 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       if (!card || isJackCard(card)) return state;
 
       const revealedMaterial = getCardDef(card).material;
+      const hasBarracks = hasCompletedBuilding(player, 'barracks');
 
-      // Take one matching card from pool to stockpile
-      let newState = { ...state };
-      const poolIdx = newState.pool.findIndex(c => getCardDef(c).material === revealedMaterial);
-      if (poolIdx !== -1) {
-        const poolCard = newState.pool[poolIdx]!;
-        newState = {
-          ...newState,
-          pool: [...newState.pool.slice(0, poolIdx), ...newState.pool.slice(poolIdx + 1)],
-        };
+      // Bridge: take from all opponents' stockpiles instead of pool + demand
+      if (action.bridge) {
+        if (!hasCompletedBuilding(player, 'bridge')) return state;
+        let newState = { ...state };
+        const stolenCards: Card[] = [];
+
+        for (let i = 0; i < newState.playerCount; i++) {
+          if (i === actorId) continue;
+          const opponent = newState.players[i]!;
+          const matching = opponent.stockpile.filter(c => getCardDef(c).material === revealedMaterial);
+          if (matching.length === 0) continue;
+
+          if (hasBarracks) {
+            stolenCards.push(...matching);
+            newState = updatePlayer(newState, i, {
+              stockpile: opponent.stockpile.filter(c => getCardDef(c).material !== revealedMaterial),
+            });
+          } else {
+            stolenCards.push(matching[0]!);
+            newState = updatePlayer(newState, i, {
+              stockpile: opponent.stockpile.filter(c => c.uid !== matching[0]!.uid),
+            });
+          }
+        }
+
         newState = updatePlayer(newState, actorId, {
-          stockpile: [...newState.players[actorId]!.stockpile, poolCard],
+          stockpile: [...newState.players[actorId]!.stockpile, ...stolenCards],
         });
+
+        return advanceActor(newState, phase);
+      }
+
+      // Take matching cards from pool to stockpile
+      let newState = { ...state };
+      if (hasBarracks) {
+        // Barracks: take ALL matching from pool
+        const matchingPool = newState.pool.filter(c => getCardDef(c).material === revealedMaterial);
+        if (matchingPool.length > 0) {
+          newState = {
+            ...newState,
+            pool: newState.pool.filter(c => getCardDef(c).material !== revealedMaterial),
+          };
+          newState = updatePlayer(newState, actorId, {
+            stockpile: [...newState.players[actorId]!.stockpile, ...matchingPool],
+          });
+        }
+      } else {
+        // Normal: take one matching from pool
+        const poolIdx = newState.pool.findIndex(c => getCardDef(c).material === revealedMaterial);
+        if (poolIdx !== -1) {
+          const poolCard = newState.pool[poolIdx]!;
+          newState = {
+            ...newState,
+            pool: [...newState.pool.slice(0, poolIdx), ...newState.pool.slice(poolIdx + 1)],
+          };
+          newState = updatePlayer(newState, actorId, {
+            stockpile: [...newState.players[actorId]!.stockpile, poolCard],
+          });
+        }
       }
 
       // Find neighbors who have matching material in hand, filtering out blocked demands
@@ -892,6 +1092,20 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
       if (demandees.length === 0) {
         // No neighbors to demand from (or all blocked), advance actor
+        return advanceActor(newState, phase);
+      }
+
+      // Barracks: auto-take all matching cards from all demandees (no choice)
+      if (hasBarracks) {
+        for (const nId of demandees) {
+          const neighbor = newState.players[nId]!;
+          const matching = neighbor.hand.filter(c => !isJackCard(c) && getCardDef(c).material === revealedMaterial);
+          const remaining = neighbor.hand.filter(c => isJackCard(c) || getCardDef(c).material !== revealedMaterial);
+          newState = updatePlayer(newState, nId, { hand: remaining });
+          newState = updatePlayer(newState, actorId, {
+            stockpile: [...newState.players[actorId]!.stockpile, ...matching],
+          });
+        }
         return advanceActor(newState, phase);
       }
 
@@ -972,9 +1186,144 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return advanceActor(newState, phase);
     }
 
+    case 'QUARRY_CRAFTSMAN': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      if (!phase.pendingAbilities?.some(a => a.kind === 'quarry')) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const building = player.buildings[action.buildingIndex];
+      if (!building || building.completed) return state;
+
+      const buildingDef = getCardDef(building.foundationCard);
+
+      // Scriptorium: take matching material from pool
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'scriptorium')) return state;
+        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === buildingDef.material);
+        if (poolIdx === -1) return state;
+        const poolCard = state.pool[poolIdx]!;
+        const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+        const newBuildings = player.buildings.map((b, i) =>
+          i === action.buildingIndex ? { ...b, materials: [...b.materials, poolCard] } : b
+        );
+        let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
+        newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        return resolvePendingAbility(newState, 'quarry');
+      }
+
+      const { card, newHand } = removeCardFromHand(player, action.cardUid);
+      const cardDef = getCardDef(card);
+      if (cardDef.material !== buildingDef.material) return state;
+
+      const newBuildings = player.buildings.map((b, i) =>
+        i === action.buildingIndex ? { ...b, materials: [...b.materials, card] } : b
+      );
+
+      let newState = updatePlayer(state, actorId, { hand: newHand, buildings: newBuildings });
+      newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      return resolvePendingAbility(newState, 'quarry');
+    }
+
+    case 'ENCAMPMENT_START': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const encampment = phase.pendingAbilities?.find(a => a.kind === 'encampment');
+      if (!encampment || encampment.kind !== 'encampment') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const { card, newHand } = removeCardFromHand(player, action.cardUid);
+      const cardDef = getCardDef(card);
+
+      // Must match the encampment's material type
+      if (cardDef.material !== encampment.material) return state;
+      if (!canStartBuildingOfMaterial(player, cardDef.material, state.sites, state.outOfTownSites)) return state;
+
+      const isOutOfTown = action.outOfTown || requiresOutOfTownSite(cardDef.material, state.sites);
+
+      const newBuilding: Building = {
+        foundationCard: card,
+        materials: [],
+        completed: false,
+        outOfTown: isOutOfTown || undefined,
+      };
+
+      let newState = updatePlayer(state, actorId, {
+        hand: newHand,
+        buildings: [...player.buildings, newBuilding],
+      });
+
+      if (isOutOfTown) {
+        newState = {
+          ...newState,
+          outOfTownSites: {
+            ...newState.outOfTownSites,
+            [cardDef.material]: newState.outOfTownSites[cardDef.material] - 1,
+          },
+        };
+      } else {
+        newState = {
+          ...newState,
+          sites: {
+            ...newState.sites,
+            [cardDef.material]: newState.sites[cardDef.material] - 1,
+          },
+        };
+      }
+
+      const buildingIdx = newState.players[actorId]!.buildings.length - 1;
+      newState = completeBuildingIfReady(newState, actorId, buildingIdx);
+      return resolvePendingAbility(newState, 'encampment');
+    }
+
+    case 'JUNKYARD_ACTIVATE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      if (!phase.pendingAbilities?.some(a => a.kind === 'junkyard')) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+
+      const nonJacks = player.hand.filter(c => !isJackCard(c));
+      const jacks = player.hand.filter(c => isJackCard(c));
+
+      let newState: GameState;
+      if (action.keepJacks) {
+        // Non-jacks to stockpile, keep jacks in hand
+        newState = updatePlayer(state, actorId, {
+          hand: jacks,
+          stockpile: [...player.stockpile, ...nonJacks],
+        });
+      } else {
+        // Non-jacks to stockpile, jacks back to jack pile
+        newState = {
+          ...updatePlayer(state, actorId, {
+            hand: [],
+            stockpile: [...player.stockpile, ...nonJacks],
+          }),
+          jackPile: state.jackPile + jacks.length,
+        };
+      }
+
+      return resolvePendingAbility(newState, 'junkyard');
+    }
+
     case 'SKIP_ACTION': {
       const { phase } = state;
       if (phase.type !== 'action') return state;
+      // If pending abilities, skip the current one
+      if (phase.pendingAbilities && phase.pendingAbilities.length > 0) {
+        const remaining = phase.pendingAbilities.slice(1);
+        if (remaining.length > 0) {
+          return { ...state, phase: { ...phase, pendingAbilities: remaining } };
+        }
+        return advanceActor(
+          { ...state, phase: { ...phase, pendingAbilities: undefined } },
+          phase,
+        );
+      }
       return advanceActor(state, phase);
     }
 
@@ -1016,16 +1365,22 @@ export interface AvailableActions {
   followOptions: { cardUid: number; extraCardUids?: number[] }[];
   architectOptions: { cardUid: number; outOfTown?: boolean }[];
   architectCraneOptions: { cardUid: number; craneCardUid: number }[];
-  craftsmanOptions: { buildingIndex: number; cardUid: number }[];
+  craftsmanOptions: { buildingIndex: number; cardUid: number; fromPool?: boolean }[];
   laborerPoolOptions: MaterialType[];
   laborerHandOptions: { cardUid: number }[];
-  laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
+  laborerBuildingOptions: { material: MaterialType; buildingIndex: number; fromPool?: boolean }[];
   merchantOptions: MaterialType[];
   bazaarOptions: MaterialType[];
   vaultFull: boolean;
   patronOptions: MaterialType[];
   legionaryOptions: { cardUid: number }[];
+  bridgeLegionaryOptions: { cardUid: number }[];
   legionaryGiveOptions: { cardUid: number }[];
+  quarryCraftsmanOptions: { buildingIndex: number; cardUid: number; fromPool?: boolean }[];
+  encampmentOptions: { cardUid: number; outOfTown?: boolean }[];
+  canJunkyard: boolean;
+  hasJacksForJunkyard: boolean;
+  pendingAbilityKind: string | null;
   canSkip: boolean;
 }
 
@@ -1047,7 +1402,13 @@ export function getAvailableActions(state: GameState): AvailableActions {
     vaultFull: false,
     patronOptions: [],
     legionaryOptions: [],
+    bridgeLegionaryOptions: [],
     legionaryGiveOptions: [],
+    quarryCraftsmanOptions: [],
+    encampmentOptions: [],
+    canJunkyard: false,
+    hasJacksForJunkyard: false,
+    pendingAbilityKind: null,
     canSkip: false,
   };
 
@@ -1056,6 +1417,53 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
   const player = state.players[activeId]!;
   const { phase } = state;
+
+  // Handle pending triggered abilities
+  if (phase.type === 'action' && phase.pendingAbilities && phase.pendingAbilities.length > 0) {
+    const ability = phase.pendingAbilities[0]!;
+    result.canSkip = true;
+    result.pendingAbilityKind = ability.kind;
+
+    if (ability.kind === 'quarry') {
+      for (let bi = 0; bi < player.buildings.length; bi++) {
+        const building = player.buildings[bi]!;
+        if (building.completed) continue;
+        const buildingDef = getCardDef(building.foundationCard);
+        for (const card of player.hand) {
+          if (isJackCard(card)) continue;
+          if (getCardDef(card).material === buildingDef.material) {
+            result.quarryCraftsmanOptions.push({ buildingIndex: bi, cardUid: card.uid });
+          }
+        }
+        // Scriptorium: pool cards
+        if (hasCompletedBuilding(player, 'scriptorium')) {
+          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
+            result.quarryCraftsmanOptions.push({ buildingIndex: bi, cardUid: 0, fromPool: true });
+          }
+        }
+      }
+    }
+
+    if (ability.kind === 'encampment') {
+      const material = ability.material;
+      if (canStartBuildingOfMaterial(player, material, state.sites, state.outOfTownSites)) {
+        for (const card of player.hand) {
+          if (isJackCard(card)) continue;
+          if (getCardDef(card).material === material) {
+            const outOfTown = requiresOutOfTownSite(material, state.sites);
+            result.encampmentOptions.push({ cardUid: card.uid, outOfTown: outOfTown || undefined });
+          }
+        }
+      }
+    }
+
+    if (ability.kind === 'junkyard') {
+      result.canJunkyard = true;
+      result.hasJacksForJunkyard = player.hand.some(c => isJackCard(c));
+    }
+
+    return result;
+  }
 
   if (phase.type === 'lead' || phase.type === 'follow' || phase.type === 'thinkRound') {
     result.canThink = true;
@@ -1202,6 +1610,12 @@ export function getAvailableActions(state: GameState): AvailableActions {
             result.craftsmanOptions.push({ buildingIndex: bi, cardUid: card.uid });
           }
         }
+        // Scriptorium: pool cards as craftsman materials
+        if (hasCompletedBuilding(player, 'scriptorium')) {
+          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
+            result.craftsmanOptions.push({ buildingIndex: bi, cardUid: 0, fromPool: true });
+          }
+        }
       }
     }
 
@@ -1236,6 +1650,16 @@ export function getAvailableActions(state: GameState): AvailableActions {
             material: buildingDef.material,
             buildingIndex: bi,
           });
+        }
+        // Scriptorium: pool cards as laborer building materials
+        if (hasCompletedBuilding(player, 'scriptorium')) {
+          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
+            result.laborerBuildingOptions.push({
+              material: buildingDef.material,
+              buildingIndex: bi,
+              fromPool: true,
+            });
+          }
         }
       }
     }
@@ -1278,6 +1702,14 @@ export function getAvailableActions(state: GameState): AvailableActions {
       for (const card of player.hand) {
         if (!isJackCard(card)) {
           result.legionaryOptions.push({ cardUid: card.uid });
+        }
+      }
+      // Bridge: alternative legionary mode — take from opponents' stockpiles
+      if (hasCompletedBuilding(player, 'bridge')) {
+        for (const card of player.hand) {
+          if (!isJackCard(card)) {
+            result.bridgeLegionaryOptions.push({ cardUid: card.uid });
+          }
         }
       }
     }

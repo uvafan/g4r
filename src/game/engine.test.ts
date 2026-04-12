@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP, getEffectiveHandLimit, hasActiveBuildingPower } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP, getEffectiveHandLimit, hasActiveBuildingPower, getRequiredMaterials } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
 import { seededRng, makeState, mkBuilding, updatePlayer, finalize, withActionPhase } from './stateBuilder';
@@ -3653,5 +3653,624 @@ describe('Archway power (incomplete Marble buildings provide function)', () => {
     expect(hasActiveBuildingPower(s.players[0]!, 'temple')).toBe(true);
     // Palace is the first *incomplete* Marble — Archway activates it
     expect(hasActiveBuildingPower(s.players[0]!, 'palace')).toBe(true);
+  });
+});
+
+// ── Rubble Powers ──
+
+describe('Vat power (Concrete buildings need 1 material)', () => {
+  it('completes a Concrete building with 1 material when Vat is completed', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const vatBuilding = mkBuilding(uids.card('vat'), [uids.card('quarry')], true);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false);
+    const concreteCard = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [vatBuilding, concreteBuilding],
+      hand: [concreteCard, ...s.players[0]!.hand.slice(0, 4)],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: concreteCard.uid });
+    // Building should be complete with just 1 material (normally needs 2)
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    expect(s.players[0]!.influence).toBe(3); // 1 existing + 2 from Concrete cost
+  });
+
+  it('retroactively completes Concrete buildings with 1 material when Vat itself completes', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    // Vat is incomplete, needs 1 Rubble material
+    const vatBuilding = mkBuilding(uids.card('vat'), [], false);
+    // Concrete building already has 1 material but isn't complete (normally needs 2)
+    const concreteBuilding = mkBuilding(uids.card('road'), [uids.material('Concrete')], false);
+    const rubbleCard = uids.material('Rubble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [vatBuilding, concreteBuilding],
+      hand: [rubbleCard, ...s.players[0]!.hand.slice(0, 4)],
+    });
+    s = { ...s, sites: { ...s.sites, Rubble: s.sites.Rubble - 1, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Complete the Vat — should retroactively complete the Concrete building too
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: rubbleCard.uid });
+    expect(s.players[0]!.buildings[0]!.completed).toBe(true); // Vat
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true); // Road (retroactive)
+    // Influence: 1 (Vat) + 2 (Road) = 3
+    expect(s.players[0]!.influence).toBe(3);
+  });
+
+  it('getRequiredMaterials returns 1 for Concrete with Vat, normal cost without', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const vatBuilding = mkBuilding(uids.card('vat'), [uids.card('quarry')], true);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [vatBuilding, concreteBuilding], influence: 1 });
+    // With Vat
+    expect(getRequiredMaterials(s.players[0]!, concreteBuilding)).toBe(1);
+    // Without Vat (player 1)
+    expect(getRequiredMaterials(s.players[1]!, concreteBuilding)).toBe(2);
+  });
+
+  it('does not complete Concrete building with 1 material without Vat', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false);
+    const concreteCard = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [concreteBuilding],
+      hand: [concreteCard, ...s.players[0]!.hand.slice(0, 4)],
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: concreteCard.uid });
+    expect(s.players[0]!.buildings[0]!.completed).toBe(false);
+  });
+});
+
+describe('Fortress power (client pairs count as Legionary)', () => {
+  it('adds bonus Legionary actions from pairs of non-Brick clients', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const fortressBuilding = mkBuilding(uids.card('fortress'), [uids.card('quarry')], true);
+    let s = finalize(state, uids);
+    // 2 Wood (Craftsman) clients and 2 Stone (Merchant) clients
+    s = updatePlayer(s, 0, {
+      buildings: [fortressBuilding],
+      clientele: [uids.material('Wood'), uids.material('Wood'), uids.material('Stone'), uids.material('Stone')],
+      influence: 5,
+    });
+    // 2 Wood pairs = 1 extra, 2 Stone pairs = 1 extra = 2 total Legionary client actions
+    expect(getClientCountForRole(s.players[0]!, 'Legionary')).toBe(2);
+    // Non-Legionary roles unaffected
+    expect(getClientCountForRole(s.players[0]!, 'Craftsman')).toBe(2);
+  });
+
+  it('does not count Brick client pairs as extra Legionary', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const fortressBuilding = mkBuilding(uids.card('fortress'), [uids.card('quarry')], true);
+    let s = finalize(state, uids);
+    // 2 Brick (Legionary) clients already count as 2 Legionary — no bonus from pairs
+    s = updatePlayer(s, 0, {
+      buildings: [fortressBuilding],
+      clientele: [uids.material('Brick'), uids.material('Brick')],
+      influence: 3,
+    });
+    expect(getClientCountForRole(s.players[0]!, 'Legionary')).toBe(2);
+  });
+
+  it('does not give bonus without completed Fortress', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      clientele: [uids.material('Wood'), uids.material('Wood')],
+      influence: 3,
+    });
+    expect(getClientCountForRole(s.players[0]!, 'Legionary')).toBe(0);
+  });
+});
+
+describe('Barracks power (take all matching materials)', () => {
+  it('takes all matching materials from pool on LEGIONARY_REVEAL', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barracksBuilding = mkBuilding(uids.card('barracks'), [uids.card('quarry')], true);
+    const revealCard = uids.material('Wood');
+    const poolWood1 = uids.material('Wood');
+    const poolWood2 = uids.material('Wood');
+    const poolBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [barracksBuilding],
+      hand: [revealCard],
+      influence: 1,
+    });
+    s = { ...s, pool: [poolWood1, poolWood2, poolBrick] };
+    s = withActionPhase(s, 'Legionary');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: revealCard.uid });
+    // Should have taken BOTH Wood from pool, leaving only Brick
+    expect(s.pool).toHaveLength(1);
+    expect(getCardDef(s.pool[0]!).material).toBe('Brick');
+    expect(s.players[0]!.stockpile).toHaveLength(2);
+  });
+
+  it('auto-takes all matching cards from neighbor hand (skips demand phase)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barracksBuilding = mkBuilding(uids.card('barracks'), [uids.card('quarry')], true);
+    const revealCard = uids.material('Wood');
+    const neighborWood1 = uids.material('Wood');
+    const neighborWood2 = uids.material('Wood');
+    const neighborBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [barracksBuilding],
+      hand: [revealCard],
+      influence: 1,
+    });
+    s = updatePlayer(s, 1, {
+      hand: [neighborWood1, neighborWood2, neighborBrick],
+    });
+    s = { ...s, pool: [] };
+    s = withActionPhase(s, 'Legionary');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: revealCard.uid });
+    // Should NOT enter demand phase — Barracks auto-collects
+    expect(s.phase.type).not.toBe('legionary_demand');
+    // Actor got both Wood cards
+    expect(s.players[0]!.stockpile).toHaveLength(2);
+    // Neighbor only has the Brick card left
+    expect(s.players[1]!.hand).toHaveLength(1);
+    expect(getCardDef(s.players[1]!.hand[0]!).material).toBe('Brick');
+  });
+});
+
+describe('Bridge power (take from opponents stockpiles)', () => {
+  it('takes matching material from all opponents stockpiles', () => {
+    const { state, uids } = makeState(3, ['A', 'B', 'C'], 42);
+    const bridgeBuilding = mkBuilding(uids.card('bridge'), [uids.card('quarry')], true);
+    const revealCard = uids.material('Wood');
+    const p1WoodStock = uids.material('Wood');
+    const p2WoodStock = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [bridgeBuilding],
+      hand: [revealCard],
+      influence: 1,
+    });
+    s = updatePlayer(s, 1, { stockpile: [p1WoodStock] });
+    s = updatePlayer(s, 2, { stockpile: [p2WoodStock] });
+    s = { ...s, pool: [] };
+    s = withActionPhase(s, 'Legionary');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: revealCard.uid, bridge: true });
+    // Should advance past demand (Bridge doesn't use demand phase)
+    expect(s.phase.type).not.toBe('legionary_demand');
+    // Actor got 2 cards from stockpiles
+    expect(s.players[0]!.stockpile).toHaveLength(2);
+    expect(s.players[1]!.stockpile).toHaveLength(0);
+    expect(s.players[2]!.stockpile).toHaveLength(0);
+  });
+
+  it('does not take from pool when using Bridge', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bridgeBuilding = mkBuilding(uids.card('bridge'), [uids.card('quarry')], true);
+    const revealCard = uids.material('Wood');
+    const poolWood = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [bridgeBuilding],
+      hand: [revealCard],
+      influence: 1,
+    });
+    s = { ...s, pool: [poolWood] };
+    s = withActionPhase(s, 'Legionary');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: revealCard.uid, bridge: true });
+    // Pool should be unchanged
+    expect(s.pool).toHaveLength(1);
+  });
+
+  it('Bridge + Barracks takes all matching from opponents stockpiles', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bridgeBuilding = mkBuilding(uids.card('bridge'), [uids.card('quarry')], true);
+    const barracksBuilding = mkBuilding(uids.card('barracks'), [uids.card('vat')], true);
+    const revealCard = uids.material('Wood');
+    const stock1 = uids.material('Wood');
+    const stock2 = uids.material('Wood');
+    const stockBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [bridgeBuilding, barracksBuilding],
+      hand: [revealCard],
+      influence: 2,
+    });
+    s = updatePlayer(s, 1, { stockpile: [stock1, stock2, stockBrick] });
+    s = { ...s, pool: [] };
+    s = withActionPhase(s, 'Legionary');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: revealCard.uid, bridge: true });
+    // Should take ALL Wood from opponent's stockpile (2), leave Brick
+    expect(s.players[0]!.stockpile).toHaveLength(2);
+    expect(s.players[1]!.stockpile).toHaveLength(1);
+    expect(getCardDef(s.players[1]!.stockpile[0]!).material).toBe('Brick');
+  });
+});
+
+describe('Junkyard power (upon completion: hand to stockpile)', () => {
+  it('triggers pending ability when Junkyard completes', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const junkyardBuilding = mkBuilding(uids.card('junkyard'), [], false);
+    const rubbleCard = uids.material('Rubble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [junkyardBuilding],
+      hand: [rubbleCard, ...s.players[0]!.hand.slice(0, 3)],
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: rubbleCard.uid });
+    // Should have pending junkyard ability
+    expect(s.phase.type).toBe('action');
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities).toBeDefined();
+    expect(actionPhase.pendingAbilities![0]!.kind).toBe('junkyard');
+  });
+
+  it('JUNKYARD_ACTIVATE moves hand to stockpile keeping Jacks', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const junkyardBuilding = mkBuilding(uids.card('junkyard'), [uids.card('quarry')], true);
+    const jack1: Card = { uid: uids.next(), defId: 'jack' };
+    const jack2: Card = { uid: uids.next(), defId: 'jack' };
+    const woodCard = uids.material('Wood');
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [junkyardBuilding],
+      hand: [jack1, jack2, woodCard, brickCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Laborer');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'junkyard' }] } };
+    s = gameReducer(s, { type: 'JUNKYARD_ACTIVATE', keepJacks: true });
+    // Both Jacks kept in hand, other cards moved to stockpile
+    expect(s.players[0]!.hand).toHaveLength(2);
+    expect(s.players[0]!.hand.every(c => isJackCard(c))).toBe(true);
+    expect(s.players[0]!.stockpile).toHaveLength(2);
+  });
+
+  it('JUNKYARD_ACTIVATE without keeping Jacks: non-jacks to stockpile, jacks to jack pile', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const junkyardBuilding = mkBuilding(uids.card('junkyard'), [uids.card('quarry')], true);
+    const jack1: Card = { uid: uids.next(), defId: 'jack' };
+    const jack2: Card = { uid: uids.next(), defId: 'jack' };
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    const jackPileBefore = s.jackPile;
+    s = updatePlayer(s, 0, {
+      buildings: [junkyardBuilding],
+      hand: [jack1, jack2, woodCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Laborer');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'junkyard' }] } };
+    s = gameReducer(s, { type: 'JUNKYARD_ACTIVATE', keepJacks: false });
+    expect(s.players[0]!.hand).toHaveLength(0);
+    // Only non-jack cards go to stockpile
+    expect(s.players[0]!.stockpile).toHaveLength(1);
+    expect(getCardDef(s.players[0]!.stockpile[0]!).material).toBe('Wood');
+    // Jacks returned to jack pile
+    expect(s.jackPile).toBe(jackPileBefore + 2);
+  });
+});
+
+describe('Quarry power (free Craftsman after building completion)', () => {
+  it('quarry scenario: completing Foundry triggers quarry and lets you add Concrete to Road', () => {
+    // Replicate the exact scenario setup
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const quarryBuilding = mkBuilding(uids.card('quarry'), [uids.card('barracks')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false);
+    const brickCard = uids.material('Brick');
+    const concreteCard1 = uids.material('Concrete');
+    const concreteCard2 = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [quarryBuilding, brickBuilding, concreteBuilding],
+      hand: [brickCard, concreteCard1, concreteCard2],
+      influence: 1,
+    });
+    s = { ...s, sites: { ...s.sites, Rubble: s.sites.Rubble - 1, Brick: s.sites.Brick - 1, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+
+    // Step 1: Complete the Foundry with the Brick card
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+
+    // Quarry should trigger
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities).toBeDefined();
+    expect(phase.pendingAbilities[0].kind).toBe('quarry');
+
+    // Available actions should include quarry craftsman options for Road (Concrete)
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('quarry');
+    expect(actions.quarryCraftsmanOptions.length).toBeGreaterThan(0);
+    const roadOption = actions.quarryCraftsmanOptions.find(o => o.buildingIndex === 2);
+    expect(roadOption).toBeDefined();
+
+    // Step 2: Use Quarry to add Concrete to Road
+    s = gameReducer(s, { type: 'QUARRY_CRAFTSMAN', buildingIndex: 2, cardUid: concreteCard1.uid });
+    expect(s.players[0]!.buildings[2]!.materials).toHaveLength(1);
+    expect(getCardDef(s.players[0]!.buildings[2]!.materials[0]!).material).toBe('Concrete');
+  });
+
+  it('triggers pending quarry ability after completing a building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const quarryBuilding = mkBuilding(uids.card('quarry'), [uids.card('barracks')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false); // Incomplete target for Quarry
+    const brickCard = uids.material('Brick');
+    const concreteCard = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [quarryBuilding, brickBuilding, concreteBuilding],
+      hand: [brickCard, concreteCard, ...s.players[0]!.hand.slice(0, 3)],
+      influence: 1,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Add last material to Brick building — completes it, triggers Quarry (concreteBuilding is still incomplete)
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities).toBeDefined();
+    expect(actionPhase.pendingAbilities![0]!.kind).toBe('quarry');
+  });
+
+  it('QUARRY_CRAFTSMAN adds material from hand to building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const quarryBuilding = mkBuilding(uids.card('quarry'), [uids.card('barracks')], true);
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false);
+    const concreteCard = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [quarryBuilding, concreteBuilding],
+      hand: [concreteCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'quarry' }] } };
+    const actions = getAvailableActions(s);
+    expect(actions.quarryCraftsmanOptions.length).toBeGreaterThan(0);
+    s = gameReducer(s, { type: 'QUARRY_CRAFTSMAN', buildingIndex: 1, cardUid: concreteCard.uid });
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+    expect(s.players[0]!.hand).toHaveLength(0);
+  });
+
+  it('Quarry does not trigger when no incomplete buildings exist', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const quarryBuilding = mkBuilding(uids.card('quarry'), [uids.card('barracks')], true);
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [quarryBuilding, woodBuilding],
+      hand: [woodCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Craftsman');
+    // Complete the only other building — afterward no incomplete buildings remain
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    // Quarry should NOT trigger (no incomplete buildings to Craftsman on)
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities ?? []).toHaveLength(0);
+  });
+});
+
+describe('Encampment power (start building of same type after completion)', () => {
+  it('triggers pending encampment ability after completing a building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const encampmentBuilding = mkBuilding(uids.card('encampment'), [uids.card('barracks')], true);
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    const woodCard2 = uids.card('dock');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [encampmentBuilding, woodBuilding],
+      hand: [woodCard, woodCard2],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities).toBeDefined();
+    expect(actionPhase.pendingAbilities![0]!.kind).toBe('encampment');
+  });
+
+  it('ENCAMPMENT_START creates a new building of the same material', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const encampmentBuilding = mkBuilding(uids.card('encampment'), [uids.card('barracks')], true);
+    const dockCard = uids.card('dock');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [encampmentBuilding],
+      hand: [dockCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Craftsman');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'encampment', material: 'Wood' }] } };
+    const actions = getAvailableActions(s);
+    expect(actions.encampmentOptions.length).toBeGreaterThan(0);
+    const sitesBefore = s.sites.Wood;
+    s = gameReducer(s, { type: 'ENCAMPMENT_START', cardUid: dockCard.uid });
+    // New building created but not yet complete (cost 1 needs 1 material via Craftsman)
+    expect(s.players[0]!.buildings).toHaveLength(2);
+    expect(s.players[0]!.buildings[1]!.completed).toBe(false);
+    expect(getCardDef(s.players[0]!.buildings[1]!.foundationCard).material).toBe('Wood');
+    expect(s.sites.Wood).toBe(sitesBefore - 1);
+    // Card should be removed from hand
+    expect(s.players[0]!.hand).toHaveLength(0);
+  });
+
+  it('Encampment does not trigger when no site available for the material', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const encampmentBuilding = mkBuilding(uids.card('encampment'), [uids.card('barracks')], true);
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    const woodCard2 = uids.card('dock');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [encampmentBuilding, woodBuilding],
+      hand: [woodCard, woodCard2],
+      influence: 1,
+    });
+    // Use up all Wood sites
+    s = { ...s, sites: { ...s.sites, Wood: 0 }, outOfTownSites: { ...s.outOfTownSites, Wood: 0 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    // No site available, so Encampment should not trigger
+    expect((actionPhase.pendingAbilities ?? []).filter(a => a.kind === 'encampment')).toHaveLength(0);
+  });
+
+  it('Encampment can start a building on an out-of-town site when normal sites are depleted', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const encampmentBuilding = mkBuilding(uids.card('encampment'), [uids.card('barracks')], true);
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    const woodCard2 = uids.card('dock');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [encampmentBuilding, woodBuilding],
+      hand: [woodCard, woodCard2],
+      influence: 1,
+    });
+    // Deplete normal Wood sites but leave out-of-town available
+    s = { ...s, sites: { ...s.sites, Wood: 0 } };
+    expect(s.outOfTownSites.Wood).toBeGreaterThan(0);
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    // Building should complete
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    // Encampment should trigger since out-of-town sites are available
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities).toBeDefined();
+    expect(actionPhase.pendingAbilities!.some((a: any) => a.kind === 'encampment')).toBe(true);
+
+    // getAvailableActions should show encampment options marked as out-of-town
+    const actions = getAvailableActions(s);
+    expect(actions.encampmentOptions.length).toBeGreaterThan(0);
+    expect(actions.encampmentOptions[0]!.outOfTown).toBe(true);
+
+    // Perform the ENCAMPMENT_START — should use an out-of-town site
+    const ootBefore = s.outOfTownSites.Wood;
+    s = gameReducer(s, { type: 'ENCAMPMENT_START', cardUid: woodCard2.uid, outOfTown: true });
+    expect(s.players[0]!.buildings).toHaveLength(3);
+    const newBuilding = s.players[0]!.buildings[2]!;
+    expect(newBuilding.outOfTown).toBe(true);
+    expect(getCardDef(newBuilding.foundationCard).material).toBe('Wood');
+    expect(s.outOfTownSites.Wood).toBe(ootBefore - 1);
+  });
+});
+
+describe('Scriptorium power (Craftsman/Laborer use pool cards)', () => {
+  it('Craftsman: add material from pool to building with Scriptorium', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const scripBuilding = mkBuilding(uids.card('scriptorium'), [uids.card('quarry')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [], false);
+    const poolBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [scripBuilding, brickBuilding],
+      influence: 1,
+    });
+    s = { ...s, pool: [poolBrick] };
+    s = withActionPhase(s, 'Craftsman');
+    const actions = getAvailableActions(s);
+    expect(actions.craftsmanOptions.some(o => o.fromPool && o.buildingIndex === 1)).toBe(true);
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: 0, fromPool: true });
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+    expect(s.pool).toHaveLength(0);
+  });
+
+  it('Laborer: add material from pool to building with Scriptorium', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const scripBuilding = mkBuilding(uids.card('scriptorium'), [uids.card('quarry')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [], false);
+    const poolBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [scripBuilding, brickBuilding],
+      influence: 1,
+    });
+    s = { ...s, pool: [poolBrick] };
+    s = withActionPhase(s, 'Laborer');
+    const actions = getAvailableActions(s);
+    expect(actions.laborerBuildingOptions.some(o => o.fromPool && o.buildingIndex === 1)).toBe(true);
+    s = gameReducer(s, { type: 'LABORER_STOCKPILE_TO_BUILDING', material: 'Brick', buildingIndex: 1, fromPool: true });
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+    expect(s.pool).toHaveLength(0);
+  });
+
+  it('rejects fromPool without completed Scriptorium', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [], false);
+    const poolBrick = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [brickBuilding] });
+    s = { ...s, pool: [poolBrick] };
+    s = withActionPhase(s, 'Craftsman');
+    const before = s;
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: 0, fromPool: true });
+    // Should be unchanged (rejected)
+    expect(s).toBe(before);
+  });
+});
+
+describe('Pending abilities: skip and chaining', () => {
+  it('SKIP_ACTION skips current pending ability and moves to next', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    let s = finalize(state, uids);
+    s = withActionPhase(s, 'Craftsman');
+    s = {
+      ...s,
+      phase: {
+        ...s.phase as any,
+        pendingAbilities: [
+          { kind: 'quarry' },
+          { kind: 'encampment', material: 'Rubble' as any },
+        ],
+      },
+    };
+    // Skip quarry
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    const p1 = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(p1.pendingAbilities).toHaveLength(1);
+    expect(p1.pendingAbilities![0]!.kind).toBe('encampment');
+    // Skip encampment
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    // Should have advanced past pending
+    expect((s.phase as any).pendingAbilities).toBeUndefined();
+  });
+
+  it('completing a building triggers both Quarry and Encampment', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const quarryBuilding = mkBuilding(uids.card('quarry'), [uids.card('vat')], true);
+    const encampmentBuilding = mkBuilding(uids.card('encampment'), [uids.card('barracks')], true);
+    // A Wood building needing 1 more material to complete
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    const woodCard2 = uids.card('dock'); // For encampment to start
+    const concreteBuilding = mkBuilding(uids.card('road'), [], false); // Target for quarry
+    const concreteCard = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [quarryBuilding, encampmentBuilding, woodBuilding, concreteBuilding],
+      hand: [woodCard, woodCard2, concreteCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Wood: s.sites.Wood - 1, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Complete the Wood building — triggers both Quarry (for concreteBuilding) and Encampment (start another Wood)
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 2, cardUid: woodCard.uid });
+    expect(s.players[0]!.buildings[2]!.completed).toBe(true);
+    const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
+    expect(actionPhase.pendingAbilities).toBeDefined();
+    // Should have both quarry and encampment
+    const kinds = actionPhase.pendingAbilities!.map(a => a.kind);
+    expect(kinds).toContain('quarry');
+    expect(kinds).toContain('encampment');
   });
 });

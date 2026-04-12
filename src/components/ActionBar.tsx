@@ -261,11 +261,22 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
               Add Material to Building
             </button>
           ) : (
-            <span className="action-hint">
-              {actions.craftsmanOptions.length > 0
-                ? 'Select a card and an in-progress building to add material'
-                : 'No valid craftsman actions'}
-            </span>
+            actions.craftsmanOptions.filter(o => !o.fromPool).length > 0
+              ? <span className="action-hint">Select a card and an in-progress building to add material</span>
+              : null
+          )}
+          {selectedBuildingIndex !== null && actions.craftsmanOptions.some(o => o.fromPool && o.buildingIndex === selectedBuildingIndex) && (
+            <button onClick={() => dispatch({
+              type: 'CRAFTSMAN_ADD',
+              buildingIndex: selectedBuildingIndex,
+              cardUid: 0,
+              fromPool: true,
+            })}>
+              Scriptorium: Add from Pool to Building
+            </button>
+          )}
+          {actions.craftsmanOptions.length === 0 && (
+            <span className="action-hint">No valid craftsman actions</span>
           )}
         </>
       )}
@@ -318,12 +329,22 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
         <>
           {actions.legionaryOptions.length > 0 ? (
             selectedCardUid !== null && actions.legionaryOptions.some(o => o.cardUid === selectedCardUid) ? (
-              <button onClick={() => dispatch({ type: 'LEGIONARY_REVEAL', cardUid: selectedCardUid })}>
-                Demand {(() => {
-                  const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
-                  return card ? getCardDef(card).material : '?';
-                })()}
-              </button>
+              <>
+                <button onClick={() => dispatch({ type: 'LEGIONARY_REVEAL', cardUid: selectedCardUid })}>
+                  Demand {(() => {
+                    const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                    return card ? getCardDef(card).material : '?';
+                  })()}
+                </button>
+                {actions.bridgeLegionaryOptions.some(o => o.cardUid === selectedCardUid) && (
+                  <button onClick={() => dispatch({ type: 'LEGIONARY_REVEAL', cardUid: selectedCardUid, bridge: true })}>
+                    Bridge: Take {(() => {
+                      const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                      return card ? getCardDef(card).material : '?';
+                    })()} from Stockpiles
+                  </button>
+                )}
+              </>
             ) : (
               <span className="action-hint">Select a card from hand to reveal and demand its material</span>
             )
@@ -424,9 +445,9 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
             </div>
           )}
           {selectedBuildingIndex !== null &&
-            actions.laborerBuildingOptions.some(o => o.buildingIndex === selectedBuildingIndex) ? (
+            actions.laborerBuildingOptions.some(o => o.buildingIndex === selectedBuildingIndex && !o.fromPool) ? (
             <button onClick={() => {
-              const opt = actions.laborerBuildingOptions.find(o => o.buildingIndex === selectedBuildingIndex)!;
+              const opt = actions.laborerBuildingOptions.find(o => o.buildingIndex === selectedBuildingIndex && !o.fromPool)!;
               dispatch({
                 type: 'LABORER_STOCKPILE_TO_BUILDING',
                 material: opt.material,
@@ -435,18 +456,100 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
             }}>
               Add from Stockpile to Building
             </button>
-          ) : actions.laborerBuildingOptions.length > 0 ? (
+          ) : actions.laborerBuildingOptions.filter(o => !o.fromPool).length > 0 ? (
             <span className="action-hint">Select an in-progress building to add stockpile material</span>
           ) : null}
+          {selectedBuildingIndex !== null &&
+            actions.laborerBuildingOptions.some(o => o.buildingIndex === selectedBuildingIndex && o.fromPool) && (
+            <button onClick={() => {
+              const opt = actions.laborerBuildingOptions.find(o => o.buildingIndex === selectedBuildingIndex && o.fromPool)!;
+              dispatch({
+                type: 'LABORER_STOCKPILE_TO_BUILDING',
+                material: opt.material,
+                buildingIndex: selectedBuildingIndex,
+                fromPool: true,
+              });
+            }}>
+              Scriptorium: Add from Pool to Building
+            </button>
+          )}
           {actions.laborerPoolOptions.length === 0 && actions.laborerBuildingOptions.length === 0 && actions.laborerHandOptions.length === 0 && (
             <span className="action-hint">No laborer actions available</span>
           )}
         </>
       )}
 
+      {actions.pendingAbilityKind === 'quarry' && (
+        <>
+          <span className="action-label">Quarry: Free Craftsman action —</span>
+          {selectedCardUid !== null && selectedBuildingIndex !== null &&
+            actions.quarryCraftsmanOptions.some(o => o.cardUid === selectedCardUid && o.buildingIndex === selectedBuildingIndex && !o.fromPool) ? (
+            <button onClick={() => dispatch({
+              type: 'QUARRY_CRAFTSMAN',
+              buildingIndex: selectedBuildingIndex,
+              cardUid: selectedCardUid,
+            })}>
+              Quarry: Add Material to Building
+            </button>
+          ) : (
+            actions.quarryCraftsmanOptions.filter(o => !o.fromPool).length > 0
+              ? <span className="action-hint">Select a card and a building</span>
+              : null
+          )}
+          {selectedBuildingIndex !== null &&
+            actions.quarryCraftsmanOptions.some(o => o.fromPool && o.buildingIndex === selectedBuildingIndex) && (
+            <button onClick={() => dispatch({
+              type: 'QUARRY_CRAFTSMAN',
+              buildingIndex: selectedBuildingIndex,
+              cardUid: 0,
+              fromPool: true,
+            })}>
+              Quarry + Scriptorium: Add from Pool
+            </button>
+          )}
+        </>
+      )}
+
+      {actions.pendingAbilityKind === 'encampment' && (
+        <>
+          <span className="action-label">Encampment: Start building of same type —</span>
+          {selectedCardUid !== null && actions.encampmentOptions.some(o => o.cardUid === selectedCardUid) ? (
+            <button onClick={() => {
+              const opt = actions.encampmentOptions.find(o => o.cardUid === selectedCardUid)!;
+              dispatch({
+                type: 'ENCAMPMENT_START',
+                cardUid: selectedCardUid,
+                outOfTown: opt.outOfTown,
+              });
+            }}>
+              Encampment: Start {(() => {
+                const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                return card ? getCardDef(card).name : '?';
+              })()}{actions.encampmentOptions.find(o => o.cardUid === selectedCardUid)?.outOfTown ? ' (Out of Town)' : ''}
+            </button>
+          ) : (
+            <span className="action-hint">Select a card to start as a building</span>
+          )}
+        </>
+      )}
+
+      {actions.canJunkyard && (
+        <>
+          <span className="action-label">Junkyard: Hand to Stockpile —</span>
+          <button onClick={() => dispatch({ type: 'JUNKYARD_ACTIVATE', keepJacks: true })}>
+            Move Hand to Stockpile{actions.hasJacksForJunkyard ? ' (keep Jacks)' : ''}
+          </button>
+          {actions.hasJacksForJunkyard && (
+            <button onClick={() => dispatch({ type: 'JUNKYARD_ACTIVATE', keepJacks: false })}>
+              Move Hand to Stockpile (discard Jacks)
+            </button>
+          )}
+        </>
+      )}
+
       {actions.canSkip && (
         <button onClick={() => dispatch({ type: 'SKIP_ACTION' })}>
-          Skip Action
+          {actions.pendingAbilityKind ? `Skip ${actions.pendingAbilityKind.charAt(0).toUpperCase() + actions.pendingAbilityKind.slice(1)}` : 'Skip Action'}
         </button>
       )}
     </div>

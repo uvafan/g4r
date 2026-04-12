@@ -1,7 +1,6 @@
-import { GameState, Card, Building } from './types';
+import { GameState } from './types';
 import { createInitialState } from './engine';
-import { getCardDef } from './cards';
-import { seededRng, makeState, withActionPhase, updatePlayer, mkBuilding, finalize } from './stateBuilder';
+import { seededRng, makeScenarioState, mkBuilding, buildScenario, withActionPhase } from './stateBuilder';
 
 export interface Scenario {
   name: string;
@@ -20,710 +19,722 @@ export function freshGame(): Scenario {
 
 /** Architect action phase — player 0 can start a building */
 export function architectAction(): Scenario {
-  const { state } = makeState(2, ['Alice', 'Bob'], 100);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 100);
+  const result = buildScenario(state, pool, [{}, {}]);
   return {
     name: 'Architect action',
     description: 'Player 0 in Architect action phase',
-    state: withActionPhase(state, 'Architect'),
+    state: withActionPhase(result, 'Architect'),
   };
 }
 
 /** Craftsman action with an open Brick building */
 export function craftsmanWithBuilding(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 200);
-  const brickCard = state.players[0]!.hand.find(c => getCardDef(c).material === 'Brick');
-  if (!brickCard) {
-    const card = uids.material('Brick');
-    const building = mkBuilding(card, [], false);
-    return {
-      name: 'Craftsman with building',
-      description: 'Player 0 has open Brick building, Craftsman action',
-      state: withActionPhase(
-        updatePlayer(finalize(state, uids), 0, { buildings: [building] }),
-        'Craftsman',
-      ),
-    };
-  }
-  const building = mkBuilding(brickCard, [], false);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 200);
+  const foundation = pool.card('foundry');
+  const building = mkBuilding(foundation, [], false);
+  // Ensure P0 has a Brick card in hand for adding material
+  const brickCard = pool.material('Brick');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [brickCard, pool.material('Wood'), pool.material('Concrete'), pool.material('Stone'), pool.material('Rubble')];
+  const result = buildScenario(state, pool, [{ buildings: [building], hand }, {}]);
   return {
     name: 'Craftsman with building',
     description: 'Player 0 has open Brick building, Craftsman action',
-    state: withActionPhase(
-      updatePlayer(state, 0, {
-        hand: state.players[0]!.hand.filter(c => c.uid !== brickCard.uid),
-        buildings: [building],
-      }),
-      'Craftsman',
-    ),
+    state: withActionPhase(result, 'Craftsman'),
   };
 }
 
 /** Legionary action — player 0 can reveal, player 1 has matching cards */
 export function legionaryAction(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const woodCard = uids.material('Wood');
-  const woodCard2 = uids.material('Wood');
-  const woodPoolCard = uids.material('Wood');
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const p0Wood = pool.material('Wood');
+  const p1Wood = pool.material('Wood');
+  const poolWood = pool.material('Wood');
+  const result = buildScenario(state, pool, [
+    { hand: [p0Wood, ...state.players[0]!.hand] },
+    { hand: [p1Wood, ...state.players[1]!.hand] },
+  ], [poolWood]);
   return {
     name: 'Legionary action',
     description: 'Player 0 Legionary with Wood cards in pool + opponent hand',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      pool: [woodPoolCard],
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, hand: [woodCard, ...p.hand] };
-        if (i === 1) return { ...p, hand: [woodCard2, ...p.hand] };
-        return p;
-      }),
-    }, 'Legionary'),
+    state: withActionPhase(result, 'Legionary'),
   };
 }
 
 /** Laborer action — pool has materials to take */
 export function laborerAction(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const poolCards = [uids.material('Wood'), uids.material('Brick'), uids.material('Rubble')];
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const gamePool = [pool.material('Wood'), pool.material('Brick'), pool.material('Rubble')];
+  const result = buildScenario(state, pool, [{}, {}], gamePool);
   return {
     name: 'Laborer action',
     description: 'Player 0 Laborer with 3 materials in pool',
-    state: withActionPhase({ ...finalize(state, uids), pool: poolCards }, 'Laborer'),
+    state: withActionPhase(result, 'Laborer'),
   };
 }
 
-/** Merchant action — player 0 has materials in stockpile */
+/** Merchant action — player 0 has materials in stockpile and influence to vault */
 export function merchantAction(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const stockpileCards = [uids.material('Stone'), uids.material('Brick')];
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true);
+  const stockpile = [pool.material('Stone'), pool.material('Brick')];
+  const result = buildScenario(state, pool, [{ buildings: [building], stockpile }, {}]);
   return {
     name: 'Merchant action',
-    description: 'Player 0 Merchant with Stone + Brick in stockpile',
-    state: withActionPhase(
-      updatePlayer(finalize(state, uids), 0, { stockpile: stockpileCards }),
-      'Merchant',
-    ),
+    description: 'Player 0 Merchant with Stone + Brick in stockpile, 1 influence',
+    state: withActionPhase(result, 'Merchant'),
   };
 }
 
 /** Patron action — pool has cards to hire as clients */
 export function patronAction(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const poolCards = [uids.material('Wood'), uids.material('Concrete')];
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const buildings = [
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+  ];
+  const gamePool = [pool.material('Wood'), pool.material('Concrete')];
+  const result = buildScenario(state, pool, [{ buildings }, {}], gamePool);
   return {
     name: 'Patron action',
     description: 'Player 0 Patron with Wood + Concrete clients available in pool',
-    state: withActionPhase({
-      ...updatePlayer(finalize(state, uids), 0, { influence: 3 }),
-      pool: poolCards,
-    }, 'Patron'),
+    state: withActionPhase(result, 'Patron'),
   };
 }
 
 /** Mid-game with completed buildings, clientele, vault, etc. */
 export function midGame(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const completedBuilding = mkBuilding(
-    uids.material('Rubble'), [uids.material('Rubble')], true,
-  );
-  const openBuilding = mkBuilding(
-    uids.material('Brick'), [uids.material('Brick')], false,
-  );
-  const p1Building = mkBuilding(
-    uids.material('Stone'),
-    [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')],
-    true,
-  );
+  const p0Buildings = [
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+    mkBuilding(pool.card('foundry'), [pool.material('Brick')], false),
+  ];
+  const p1Buildings = [
+    mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true),
+  ];
+
+  const gamePool = [pool.material('Wood'), pool.material('Concrete')];
 
   return {
     name: 'Mid-game',
     description: '2p mid-game: buildings, clients, stockpile, vault',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Wood'), uids.material('Concrete')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: [completedBuilding, openBuilding],
-          clientele: [uids.material('Concrete')],
-          stockpile: [uids.material('Wood')],
-          vault: [uids.material('Stone')],
-          influence: 1,
-        };
-        if (i === 1) return {
-          ...p,
-          buildings: [p1Building],
-          clientele: [uids.material('Marble')],
-          vault: [uids.material('Brick'), uids.material('Brick')],
-          influence: 3,
-        };
-        return p;
-      }),
-      sites: { ...state.sites, Rubble: state.sites.Rubble - 1, Brick: state.sites.Brick - 1, Stone: state.sites.Stone - 1 },
-    },
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Concrete')],
+        stockpile: [pool.material('Wood')],
+        vault: [pool.material('Stone')],
+      },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Marble')],
+        vault: [pool.material('Brick'), pool.material('Brick')],
+      },
+    ], gamePool),
   };
 }
 
 /** Clientele production — player 0 has Architect client and is leading */
 export function clienteleProduction(): Scenario {
-  const { state } = makeState(2, ['Alice', 'Bob'], 42);
-  const clientCard: Card = { uid: 8000, defId: 'road' }; // Concrete = Architect
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true);
+  const client = pool.material('Concrete');
+  const result = buildScenario(state, pool, [
+    { buildings: [building], clientele: [client] },
+    {},
+  ]);
   return {
     name: 'Clientele production',
     description: 'Player 0 has Architect client (gets extra Architect actions)',
-    state: updatePlayer(state, 0, { clientele: [clientCard], influence: 3 }),
+    state: result,
   };
 }
 
-/** Late game — both players have multiple completed buildings, full clientele, vaults, depleted sites */
+/** Late game — both players have multiple completed buildings, full clientele, vaults */
 export function lateGame(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
-    mkBuilding(uids.card('crane'), [uids.card('dock')], true),
-    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
-    mkBuilding(uids.card('villa'), [uids.card('library')], false),
+  const p0Buildings = [
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+    mkBuilding(pool.card('crane'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
+    mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone')], false), // 2 of 3
   ];
 
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
-    mkBuilding(uids.card('latrine'), [uids.card('fountain'), uids.card('stairway')], true),
-    mkBuilding(uids.card('amphitheatre'), [uids.card('wall')], false),
+  const p1Buildings = [
+    mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true),
+    mkBuilding(pool.card('latrine'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true),
+    mkBuilding(pool.card('amphitheatre'), [pool.material('Concrete')], false), // 1 of 2
   ];
+
+  const gamePool = [pool.material('Rubble'), pool.material('Wood')];
 
   return {
     name: 'Late game',
     description: '2p late game: many buildings, full clientele, depleted sites',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Rubble'), uids.material('Wood')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: p0Buildings,
-          clientele: [uids.material('Concrete'), uids.material('Wood'), uids.material('Stone')],
-          stockpile: [uids.material('Stone'), uids.material('Marble')],
-          vault: [uids.material('Stone'), uids.material('Marble'), uids.material('Brick')],
-          influence: 4,
-        };
-        if (i === 1) return {
-          ...p,
-          buildings: p1Buildings,
-          clientele: [uids.material('Brick'), uids.material('Marble')],
-          stockpile: [uids.material('Concrete'), uids.material('Rubble'), uids.material('Wood')],
-          vault: [uids.material('Stone'), uids.material('Stone'), uids.material('Concrete'), uids.material('Brick')],
-          influence: 5,
-        };
-        return p;
-      }),
-      sites: {
-        Rubble: state.sites.Rubble - 2,
-        Wood: state.sites.Wood - 1,
-        Brick: state.sites.Brick - 1,
-        Concrete: state.sites.Concrete - 2,
-        Stone: state.sites.Stone - 1,
-        Marble: state.sites.Marble - 1,
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Concrete'), pool.material('Wood'), pool.material('Stone')],
+        stockpile: [pool.material('Stone'), pool.material('Marble')],
+        vault: [pool.material('Stone'), pool.material('Marble'), pool.material('Brick')],
       },
-    },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Brick'), pool.material('Marble')],
+        stockpile: [pool.material('Concrete'), pool.material('Rubble'), pool.material('Wood')],
+        vault: [pool.material('Stone'), pool.material('Stone'), pool.material('Concrete'), pool.material('Brick')],
+      },
+    ], gamePool),
   };
 }
 
-/** Near end — sites almost depleted, one player close to winning */
+/** Near end — small deck, one player close to winning */
 export function nearEnd(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('statue'), [uids.card('market')], true),
-    mkBuilding(uids.card('villa'), [uids.card('sanctuary'), uids.card('library')], true),
-    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
-    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
+  const p0Buildings = [
+    mkBuilding(pool.card('statue'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('crane'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
+    mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true),
   ];
 
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
-    mkBuilding(uids.card('crane'), [uids.card('dock')], true),
-    mkBuilding(uids.card('latrine'), [uids.card('fountain'), uids.card('stairway')], true),
-    mkBuilding(uids.card('colosseum'), [uids.card('keep')], false),
+  const p1Buildings = [
+    mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true),
+    mkBuilding(pool.card('palisade'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('latrine'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true),
+    mkBuilding(pool.card('colosseum'), [pool.material('Stone')], false), // 1 of 3
   ];
+
+  const gamePool = [pool.material('Rubble'), pool.material('Brick'), pool.material('Marble')];
 
   return {
     name: 'Near end',
-    description: 'Sites nearly depleted, P0 ahead on VP, P1 trying to catch up',
-    state: {
-      ...finalize(state, uids),
-      deck: state.deck.slice(0, 15),
-      pool: [uids.material('Rubble'), uids.material('Brick'), uids.material('Marble')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: p0Buildings,
-          clientele: [uids.material('Concrete'), uids.material('Wood'), uids.material('Stone'), uids.material('Rubble')],
-          stockpile: [uids.material('Marble')],
-          vault: [uids.material('Stone'), uids.material('Marble'), uids.material('Brick'), uids.material('Concrete'), uids.material('Wood')],
-          influence: 5,
-        };
-        if (i === 1) return {
-          ...p,
-          buildings: p1Buildings,
-          clientele: [uids.material('Brick'), uids.material('Marble'), uids.material('Concrete')],
-          stockpile: [uids.material('Stone'), uids.material('Stone')],
-          vault: [uids.material('Stone'), uids.material('Stone'), uids.material('Marble'), uids.material('Marble')],
-          influence: 4,
-        };
-        return p;
-      }),
-      sites: { Rubble: 0, Wood: 0, Brick: 1, Concrete: 0, Stone: 1, Marble: 1 },
-    },
+    description: 'Small deck, P0 ahead on VP, P1 trying to catch up',
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Concrete'), pool.material('Wood'), pool.material('Stone'), pool.material('Rubble')],
+        stockpile: [pool.material('Marble')],
+        vault: [pool.material('Stone'), pool.material('Marble'), pool.material('Brick'), pool.material('Concrete'), pool.material('Wood')],
+      },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Brick'), pool.material('Marble'), pool.material('Concrete')],
+        stockpile: [pool.material('Stone'), pool.material('Stone')],
+        vault: [pool.material('Stone'), pool.material('Stone'), pool.material('Marble'), pool.material('Marble')],
+      },
+    ], gamePool, { deckSize: 15 }),
   };
 }
 
 /** 3-player mid-game — tests multiplayer dynamics */
 export function threePlayerMidGame(): Scenario {
-  let { state, uids } = makeState(3, ['Alice', 'Bob', 'Carol'], 42);
+  const { state, pool } = makeScenarioState(3, ['Alice', 'Bob', 'Carol'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('dock'), [uids.card('crane')], true),
-    mkBuilding(uids.card('foundry'), [uids.card('school')], false),
+  const p0Buildings = [
+    mkBuilding(pool.card('dock'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('foundry'), [pool.material('Brick')], false), // 1 of 2
   ];
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
+  const p1Buildings = [
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
   ];
-  const p2Buildings: Building[] = [
-    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
-    mkBuilding(uids.card('library'), [uids.card('villa'), uids.card('sanctuary')], true),
+  const p2Buildings = [
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+    mkBuilding(pool.card('library'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true),
   ];
+
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Brick'), pool.material('Stone')];
 
   return {
     name: '3p mid-game',
     description: '3-player mid-game with varied board states',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Wood'), uids.material('Concrete'), uids.material('Brick'), uids.material('Stone')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p, buildings: p0Buildings,
-          clientele: [uids.material('Wood')],
-          stockpile: [uids.material('Brick')],
-          vault: [uids.material('Rubble')],
-          influence: 2,
-        };
-        if (i === 1) return {
-          ...p, buildings: p1Buildings,
-          clientele: [uids.material('Concrete'), uids.material('Marble')],
-          stockpile: [],
-          vault: [uids.material('Brick'), uids.material('Stone')],
-          influence: 3,
-        };
-        if (i === 2) return {
-          ...p, buildings: p2Buildings,
-          clientele: [uids.material('Rubble')],
-          stockpile: [uids.material('Stone'), uids.material('Marble')],
-          vault: [uids.material('Marble')],
-          influence: 3,
-        };
-        return p;
-      }),
-      sites: {
-        Rubble: state.sites.Rubble - 2,
-        Wood: state.sites.Wood - 1,
-        Brick: state.sites.Brick - 1,
-        Concrete: state.sites.Concrete - 1,
-        Stone: state.sites.Stone - 2,
-        Marble: state.sites.Marble,
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Wood')],
+        stockpile: [pool.material('Brick')],
+        vault: [pool.material('Rubble')],
       },
-    },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Concrete')],
+        vault: [pool.material('Brick'), pool.material('Stone')],
+      },
+      {
+        buildings: p2Buildings,
+        clientele: [pool.material('Rubble')],
+        stockpile: [pool.material('Stone'), pool.material('Marble')],
+        vault: [pool.material('Marble')],
+      },
+    ], gamePool),
   };
 }
 
 /** Heavy vault game — both players focused on Merchant/vault strategy */
 export function heavyVault(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('bazaar'), [uids.card('market')], true),
-    mkBuilding(uids.card('atrium'), [uids.card('bath'), uids.card('stage')], true),
+  const p0Buildings = [
+    mkBuilding(pool.card('bazaar'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('atrium'), [pool.material('Brick'), pool.material('Brick')], true),
   ];
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('basilica'), [uids.card('palace'), uids.card('temple')], true),
-    mkBuilding(uids.card('garden'), [uids.card('sewer'), uids.card('keep')], true),
+  const p1Buildings = [
+    mkBuilding(pool.card('basilica'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true),
+    mkBuilding(pool.card('garden'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true),
   ];
+
+  const gamePool = [pool.material('Stone'), pool.material('Marble')];
 
   return {
     name: 'Heavy vault',
     description: 'Merchant-focused game, large vaults, Bazaar/Atrium/Basilica in play',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Stone'), uids.material('Marble')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p, buildings: p0Buildings,
-          clientele: [uids.material('Stone'), uids.material('Stone')],
-          stockpile: [uids.material('Marble'), uids.material('Stone'), uids.material('Brick')],
-          vault: [uids.material('Stone'), uids.material('Stone'), uids.material('Marble')],
-          influence: 3,
-        };
-        if (i === 1) return {
-          ...p, buildings: p1Buildings,
-          clientele: [uids.material('Stone'), uids.material('Marble'), uids.material('Concrete')],
-          stockpile: [uids.material('Stone'), uids.material('Wood')],
-          vault: [uids.material('Marble'), uids.material('Marble'), uids.material('Stone'), uids.material('Brick')],
-          influence: 4,
-        };
-        return p;
-      }),
-      sites: {
-        Rubble: state.sites.Rubble,
-        Wood: state.sites.Wood - 1,
-        Brick: state.sites.Brick - 1,
-        Concrete: state.sites.Concrete,
-        Stone: state.sites.Stone - 2,
-        Marble: state.sites.Marble - 2,
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Stone'), pool.material('Stone')],
+        stockpile: [pool.material('Marble'), pool.material('Stone'), pool.material('Brick')],
+        vault: [pool.material('Stone'), pool.material('Stone'), pool.material('Marble')],
       },
-    },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Stone'), pool.material('Marble'), pool.material('Concrete')],
+        stockpile: [pool.material('Stone'), pool.material('Wood')],
+        vault: [pool.material('Marble'), pool.material('Marble'), pool.material('Stone'), pool.material('Brick')],
+      },
+    ], gamePool),
   };
 }
 
 /** Deck almost empty — game will end in a few rounds from deck exhaustion */
 export function deckAlmostOut(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('dock'), [uids.card('crane')], true),
-    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
+  const p0Buildings = [
+    mkBuilding(pool.card('dock'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
   ];
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
-    mkBuilding(uids.card('latrine'), [uids.card('fountain')], false),
+  const p1Buildings = [
+    mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true),
+    mkBuilding(pool.card('latrine'), [pool.material('Marble')], false), // 1 of 3
   ];
+
+  const gamePool = [pool.material('Wood'), pool.material('Brick')];
 
   return {
     name: 'Deck almost out',
     description: 'Only 3 cards left in deck — game ends when deck empties at end of round',
-    state: {
-      ...finalize(state, uids),
-      deck: state.deck.slice(0, 3),
-      pool: [uids.material('Wood'), uids.material('Brick')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p, buildings: p0Buildings,
-          clientele: [uids.material('Concrete'), uids.material('Wood')],
-          stockpile: [uids.material('Stone'), uids.material('Marble')],
-          vault: [uids.material('Stone'), uids.material('Brick')],
-          influence: 3,
-        };
-        if (i === 1) return {
-          ...p, buildings: p1Buildings,
-          clientele: [uids.material('Brick')],
-          stockpile: [uids.material('Rubble'), uids.material('Wood')],
-          vault: [uids.material('Marble'), uids.material('Concrete')],
-          influence: 2,
-        };
-        return p;
-      }),
-      sites: {
-        Rubble: state.sites.Rubble - 1,
-        Wood: state.sites.Wood - 1,
-        Brick: state.sites.Brick - 1,
-        Concrete: state.sites.Concrete - 1,
-        Stone: state.sites.Stone - 1,
-        Marble: state.sites.Marble,
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        clientele: [pool.material('Concrete'), pool.material('Wood')],
+        stockpile: [pool.material('Stone'), pool.material('Marble')],
+        vault: [pool.material('Stone'), pool.material('Brick')],
       },
-    },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Brick')],
+        stockpile: [pool.material('Rubble'), pool.material('Wood')],
+        vault: [pool.material('Marble'), pool.material('Concrete')],
+      },
+    ], gamePool, { deckSize: 3 }),
   };
 }
 
 /** Statue power — completed Statue gives +3 VP */
 export function statuePower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('statue'), [uids.card('cross')], true),
+  const p0Buildings = [
+    mkBuilding(pool.card('statue'), [pool.material('Wood')], true),
   ];
-
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('crane'), [uids.card('dock')], true),
+  const p1Buildings = [
+    mkBuilding(pool.card('crane'), [pool.material('Wood')], true),
   ];
 
   return {
     name: 'Statue power (+3 VP)',
     description: 'Player 0 has completed Statue — should see +3 VP building bonus',
-    state: {
-      ...finalize(state, uids),
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: p0Buildings,
-          influence: 1,
-        };
-        if (i === 1) return {
-          ...p,
-          buildings: p1Buildings,
-          influence: 1,
-        };
-        return p;
-      }),
-      sites: {
-        ...state.sites,
-        Wood: state.sites.Wood - 2,
-      },
-    },
+    state: buildScenario(state, pool, [
+      { buildings: p0Buildings },
+      { buildings: p1Buildings },
+    ]),
   };
 }
 
 /** Game over — final scoring state */
 export function gameOver(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    mkBuilding(uids.card('statue'), [uids.card('cross')], true),
-    mkBuilding(uids.card('villa'), [uids.card('sanctuary'), uids.card('library')], true),
-    mkBuilding(uids.card('road'), [uids.card('vomitorium'), uids.card('tower')], true),
-    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
+  const p0Buildings = [
+    mkBuilding(pool.card('statue'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('crane'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true),
+    mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true),
   ];
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('latrine'), [uids.card('fountain'), uids.card('stairway')], true),
-    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
-    mkBuilding(uids.card('crane'), [uids.card('dock')], true),
+  const p1Buildings = [
+    mkBuilding(pool.card('latrine'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true),
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+    mkBuilding(pool.card('dock'), [pool.material('Wood')], true),
   ];
+
+  const gamePool = [pool.material('Rubble'), pool.material('Wood'), pool.material('Brick')];
+
+  const result = buildScenario(state, pool, [
+    {
+      buildings: p0Buildings,
+      clientele: [pool.material('Concrete'), pool.material('Wood'), pool.material('Stone'), pool.material('Rubble')],
+      vault: [pool.material('Stone'), pool.material('Marble'), pool.material('Brick'), pool.material('Concrete'), pool.material('Wood')],
+    },
+    {
+      buildings: p1Buildings,
+      clientele: [pool.material('Brick'), pool.material('Marble')],
+      stockpile: [pool.material('Stone')],
+      vault: [pool.material('Stone'), pool.material('Marble'), pool.material('Marble')],
+    },
+  ], gamePool);
 
   return {
     name: 'Game over',
     description: 'Finished game — view final scoring',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Rubble'), uids.material('Wood'), uids.material('Brick')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p, buildings: p0Buildings,
-          clientele: [uids.material('Concrete'), uids.material('Wood'), uids.material('Stone'), uids.material('Rubble')],
-          stockpile: [],
-          vault: [uids.material('Stone'), uids.material('Marble'), uids.material('Brick'), uids.material('Concrete'), uids.material('Wood'), uids.material('Rubble')],
-          influence: 6,
-        };
-        if (i === 1) return {
-          ...p, buildings: p1Buildings,
-          clientele: [uids.material('Brick'), uids.material('Marble')],
-          stockpile: [uids.material('Stone')],
-          vault: [uids.material('Stone'), uids.material('Marble'), uids.material('Marble')],
-          influence: 4,
-        };
-        return p;
-      }),
-      phase: { type: 'gameOver' },
-      sites: { Rubble: 0, Wood: 0, Brick: 0, Concrete: 0, Stone: 1, Marble: 1 },
-    },
+    state: { ...result, phase: { type: 'gameOver' } },
   };
 }
 
 /** Near building diversity end — player 0 has 2x Rubble, 2x Brick, 1x Stone complete + 1 Stone almost done */
 export function nearDiversityEnd(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
 
-  const p0Buildings: Building[] = [
-    // 2x Rubble (cost 1) — same material
-    mkBuilding(uids.card('barracks'), [uids.card('quarry')], true),
-    mkBuilding(uids.card('bridge'), [uids.card('junkyard')], true),
-    // 2x Brick (cost 2) — same material
-    mkBuilding(uids.card('foundry'), [uids.card('school'), uids.card('shrine')], true),
-    mkBuilding(uids.card('stage'), [uids.card('bath'), uids.card('atrium')], true),
+  const p0Buildings = [
+    // 2x Rubble (cost 1)
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true),
+    mkBuilding(pool.card('bridge'), [pool.material('Rubble')], true),
+    // 2x Brick (cost 2)
+    mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true),
+    mkBuilding(pool.card('stage'), [pool.material('Brick'), pool.material('Brick')], true),
     // 1x Stone (cost 3) complete
-    mkBuilding(uids.card('villa'), [uids.card('sanctuary'), uids.card('library')], true),
+    mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true),
     // 1x Stone (cost 3) needs one more material
-    mkBuilding(uids.card('sewer'), [uids.card('garden'), uids.card('keep')], false),
+    mkBuilding(pool.card('sewer'), [pool.material('Stone'), pool.material('Stone')], false),
   ];
 
-  const p1Buildings: Building[] = [
-    mkBuilding(uids.card('palisade'), [uids.card('market')], true),
-    mkBuilding(uids.card('amphitheatre'), [uids.card('wall')], false),
+  const p1Buildings = [
+    mkBuilding(pool.card('palisade'), [pool.material('Wood')], true),
+    mkBuilding(pool.card('amphitheatre'), [pool.material('Concrete')], false), // 1 of 2
   ];
 
   // Give player 0 a Stone card in hand to complete the sewer
-  const stoneCard = uids.material('Stone');
-  // Also give a Stone in stockpile as alternative completion path via Laborer
-  const stoneStockpile = uids.material('Stone');
+  const stoneCard = pool.material('Stone');
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [stoneCard, pool.material('Wood'), pool.material('Concrete'), pool.material('Marble'), pool.material('Rubble')];
+
+  const gamePool = [pool.material('Rubble'), pool.material('Wood'), pool.material('Stone')];
 
   return {
     name: 'Near diversity end',
     description: 'Player 0 one Stone material away from 2-2-2 same-type building diversity (game end trigger)',
-    state: {
-      ...finalize(state, uids),
-      pool: [uids.material('Rubble'), uids.material('Wood'), uids.material('Stone')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: p0Buildings,
-          hand: [stoneCard, ...p.hand.slice(0, 4)],
-          stockpile: [stoneStockpile],
-          vault: [uids.material('Stone'), uids.material('Brick')],
-          clientele: [uids.material('Concrete'), uids.material('Wood')],
-          influence: 9, // 1+1+2+2+3 from completed buildings
-        };
-        if (i === 1) return {
-          ...p,
-          buildings: p1Buildings,
-          clientele: [uids.material('Brick')],
-          stockpile: [uids.material('Rubble')],
-          vault: [uids.material('Stone')],
-          influence: 1,
-        };
-        return p;
-      }),
-      sites: {
-        Rubble: state.sites.Rubble - 2,
-        Wood: state.sites.Wood,
-        Brick: state.sites.Brick - 2,
-        Concrete: state.sites.Concrete,
-        Stone: state.sites.Stone - 2,
-        Marble: state.sites.Marble,
+    state: buildScenario(state, pool, [
+      {
+        buildings: p0Buildings,
+        hand: p0Hand,
+        stockpile: [pool.material('Stone')],
+        vault: [pool.material('Stone'), pool.material('Brick')],
+        clientele: [pool.material('Concrete'), pool.material('Wood')],
       },
-    },
+      {
+        buildings: p1Buildings,
+        clientele: [pool.material('Brick')],
+        stockpile: [pool.material('Rubble')],
+        vault: [pool.material('Stone')],
+      },
+    ], gamePool),
   };
 }
 
 /** Cross power — +1 refresh hand size */
 export function crossPower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('cross'), [pool.material('Wood')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Brick'), pool.material('Concrete')];
   return {
     name: 'Cross power (+1 hand size)',
     description: 'Player 0 has completed Cross — refresh draws to 6 instead of 5',
-    state: {
-      ...finalize(state, uids),
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, buildings: [crossBuilding], influence: 1, hand: p.hand.slice(0, 3) };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    },
+    state: buildScenario(state, pool, [{ buildings: [building], hand }, {}]),
   };
 }
 
 /** Market power — on completion, take 1 of each material from Generic Supply */
 export function marketPower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const woodCard = uids.card('crane');
-  const marketBuilding = mkBuilding(uids.card('market'), [], false);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const marketBuilding = mkBuilding(pool.card('market'), [], false); // needs 1 Wood material
+  const woodCard = pool.material('Wood');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [woodCard, pool.material('Brick'), pool.material('Concrete'), pool.material('Stone'), pool.material('Marble')];
   return {
     name: 'Market power (complete it)',
     description: 'Player 0 has Market nearly complete — finish it to see generic supply materials added to hand',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, buildings: [marketBuilding], hand: [woodCard, ...p.hand.slice(0, 4)] };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    }, 'Craftsman'),
+    state: withActionPhase(
+      buildScenario(state, pool, [{ buildings: [marketBuilding], hand }, {}]),
+      'Craftsman',
+    ),
   };
 }
 
 /** Dock power — Laborer: put 1 card from hand to stockpile */
 export function dockPower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const dockBuilding = mkBuilding(uids.card('dock'), [uids.card('crane')], true);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('dock'), [pool.material('Wood')], true);
+  const gamePool = [pool.material('Wood'), pool.material('Brick')];
   return {
     name: 'Dock power (Laborer)',
     description: 'Player 0 has completed Dock — can move hand cards to stockpile during Laborer',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      pool: [uids.material('Wood'), uids.material('Brick')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, buildings: [dockBuilding], influence: 1 };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    }, 'Laborer'),
+    state: withActionPhase(
+      buildScenario(state, pool, [{ buildings: [building] }, {}], gamePool),
+      'Laborer',
+    ),
   };
 }
 
 /** Bazaar power — Merchant: move pool material to vault */
 export function bazaarPower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('bazaar'), [pool.material('Wood')], true);
+  const gamePool = [pool.material('Stone'), pool.material('Marble'), pool.material('Brick')];
   return {
     name: 'Bazaar power (Merchant)',
     description: 'Player 0 has completed Bazaar — can vault materials directly from pool',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      pool: [uids.material('Stone'), uids.material('Marble'), uids.material('Brick')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: [bazaarBuilding],
-          stockpile: [uids.material('Wood')],
-          influence: 1,
-        };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    }, 'Merchant'),
+    state: withActionPhase(
+      buildScenario(state, pool, [
+        { buildings: [building], stockpile: [pool.material('Wood')] },
+        {},
+      ], gamePool),
+      'Merchant',
+    ),
   };
 }
 
 /** Crane power — Architect: start 2 buildings from hand */
 export function cranePower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
-  const brickCard = uids.card('foundry');
-  const stoneCard = uids.card('villa');
-  const concreteCard = uids.card('road');
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('crane'), [pool.material('Wood')], true);
+  const brickCard = pool.card('foundry');
+  const stoneCard = pool.card('villa');
+  const concreteCard = pool.card('road');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [brickCard, stoneCard, concreteCard, pool.material('Marble'), pool.material('Rubble')];
   return {
     name: 'Crane power (Architect)',
     description: 'Player 0 has completed Crane — select a card then click "Crane" to start 2 buildings',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      players: state.players.map((p, i) => {
-        if (i === 0) return {
-          ...p,
-          buildings: [craneBuilding],
-          hand: [brickCard, stoneCard, concreteCard, ...p.hand.slice(0, 2)],
-          influence: 1,
-        };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    }, 'Architect'),
+    state: withActionPhase(
+      buildScenario(state, pool, [{ buildings: [building], hand }, {}]),
+      'Architect',
+    ),
   };
 }
 
 /** Archway power — first incomplete Marble building provides its function */
 export function archwayPower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
-  const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble')], false);
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const archwayBuilding = mkBuilding(pool.card('archway'), [pool.material('Wood')], true);
+  const templeBuilding = mkBuilding(pool.card('temple'), [pool.material('Marble')], false); // 1 of 3
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Brick'), pool.material('Concrete')];
   return {
     name: 'Archway power',
     description: 'Player 0 has Archway + incomplete Temple — Temple power activates via Archway (will work when Marble powers are implemented)',
-    state: {
-      ...finalize(state, uids),
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, buildings: [archwayBuilding, templeBuilding], influence: 1, hand: p.hand.slice(0, 3) };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1, Marble: state.sites.Marble - 1 },
-    },
+    state: buildScenario(state, pool, [
+      { buildings: [archwayBuilding, templeBuilding], hand },
+      {},
+    ]),
   };
 }
 
 /** Palisade power — blocks odd-numbered legionary demands */
 export function palisadePower(): Scenario {
-  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
-  const palisadeBuilding = mkBuilding(uids.card('palisade'), [uids.card('market')], true);
-  const woodCards = [uids.material('Wood'), uids.material('Wood'), uids.material('Wood')];
-  const defenderCards = [uids.material('Wood'), uids.material('Wood'), uids.material('Wood')];
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  // P0 needs a completed Brick building for influence + Brick clients for multiple Legionary actions
+  const p0Building = mkBuilding(pool.card('foundry'), [pool.material('Brick'), pool.material('Brick')], true);
+  const p1Building = mkBuilding(pool.card('palisade'), [pool.material('Wood')], true);
+
+  // P0 Legionary clients (Brick material) — 2 clients for 3 total actions
+  const p0Clients = [pool.material('Brick'), pool.material('Brick')];
+
+  // P0 hand: Wood cards to reveal for legionary demands
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Wood'), pool.material('Wood'), pool.material('Wood')];
+
+  // P1 hand: Wood cards that match the demand
+  pool.returnCards(state.players[1]!.hand);
+  const p1Hand = [pool.material('Wood'), pool.material('Wood'), pool.material('Wood')];
+
+  const gamePool = [pool.material('Wood'), pool.material('Wood')];
+
+  const result = buildScenario(state, pool, [
+    { buildings: [p0Building], clientele: p0Clients, hand: p0Hand },
+    { buildings: [p1Building], hand: p1Hand },
+  ], gamePool);
+
   return {
     name: 'Palisade power (Legionary)',
     description: 'Player 1 has Palisade — 1st, 3rd, 5th legionary demands from each player are blocked',
-    state: withActionPhase({
-      ...finalize(state, uids),
-      pool: [uids.material('Wood'), uids.material('Wood')],
-      players: state.players.map((p, i) => {
-        if (i === 0) return { ...p, hand: woodCards };
-        if (i === 1) return { ...p, buildings: [palisadeBuilding], hand: defenderCards, influence: 1 };
-        return p;
-      }),
-      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
-    }, 'Legionary', [0, 0, 0]),
+    // P0: 1 (led) + 2 (Brick clients) = 3 actions
+    state: withActionPhase(result, 'Legionary', [0, 0, 0]),
+  };
+}
+
+/** Vat power — Concrete buildings need only 1 material */
+export function vatPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const vatBuilding = mkBuilding(pool.card('vat'), [pool.card('quarry')], true);
+  const concreteBuilding = mkBuilding(pool.card('road'), [], false);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Concrete'), pool.material('Concrete')];
+  return {
+    name: 'Vat power (Concrete)',
+    description: 'Player 0 has Vat — Concrete buildings need only 1 material to complete',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [vatBuilding, concreteBuilding], hand: p0Hand },
+      {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Fortress power — pairs of same-type clients count as Legionary */
+export function fortressPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const fortressBuilding = mkBuilding(pool.card('fortress'), [pool.card('quarry')], true);
+  // Need a high-cost building for enough influence to hold 4 clients
+  const villaBuilding = mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true);
+  const clients = [pool.material('Wood'), pool.material('Wood'), pool.material('Stone'), pool.material('Stone')];
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Brick'), pool.material('Brick')];
+  return {
+    name: 'Fortress power (Legionary)',
+    description: 'Player 0 has Fortress + 2 pairs of clients — gets bonus Legionary actions',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [fortressBuilding, villaBuilding], clientele: clients, hand: p0Hand },
+      {},
+    ]), 'Legionary', [0, 0, 0]),
+  };
+}
+
+/** Barracks power — take all matching materials from pool and demand */
+export function barracksPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const barracksBuilding = mkBuilding(pool.card('barracks'), [pool.card('quarry')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Wood'), pool.material('Wood')];
+  pool.returnCards(state.players[1]!.hand);
+  const p1Hand = [pool.material('Wood'), pool.material('Wood'), pool.material('Brick')];
+  const gamePool = [pool.material('Wood'), pool.material('Wood'), pool.material('Brick')];
+  return {
+    name: 'Barracks power (Legionary)',
+    description: 'Player 0 has Barracks — takes ALL matching from pool + demands ALL from neighbors',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [barracksBuilding], hand: p0Hand },
+      { hand: p1Hand },
+    ], gamePool), 'Legionary'),
+  };
+}
+
+/** Bridge power — take from opponents' stockpiles */
+export function bridgePower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const bridgeBuilding = mkBuilding(pool.card('bridge'), [pool.card('quarry')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Wood'), pool.material('Stone')];
+  const p1Stockpile = [pool.material('Wood'), pool.material('Stone'), pool.material('Brick')];
+  return {
+    name: 'Bridge power (Legionary)',
+    description: 'Player 0 has Bridge — can take materials from opponents stockpiles instead of demanding',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [bridgeBuilding], hand: p0Hand },
+      { stockpile: p1Stockpile },
+    ]), 'Legionary'),
+  };
+}
+
+/** Junkyard power — upon completion, hand to stockpile */
+export function junkyardPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const junkyardBuilding = mkBuilding(pool.card('junkyard'), [], false);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Rubble'), pool.material('Wood'), pool.material('Brick')];
+  let s = buildScenario(state, pool, [
+    { buildings: [junkyardBuilding], hand: p0Hand },
+    {},
+  ]);
+  // Add 2 Jacks to Alice's hand
+  const jack1 = { uid: s.nextUid, defId: 'jack' };
+  const jack2 = { uid: s.nextUid + 1, defId: 'jack' };
+  s = {
+    ...s,
+    nextUid: s.nextUid + 2,
+    jackPile: s.jackPile - 2,
+    players: s.players.map((p, i) =>
+      i === 0 ? { ...p, hand: [...p.hand, jack1, jack2] } : p
+    ),
+  };
+  return {
+    name: 'Junkyard power (completion)',
+    description: 'Player 0 has Junkyard nearly complete — finish it to move hand to stockpile (keep Jacks option)',
+    state: withActionPhase(s, 'Craftsman'),
+  };
+}
+
+/** Quarry power — free Craftsman action after building completion */
+export function quarryPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const quarryBuilding = mkBuilding(pool.card('quarry'), [pool.card('barracks')], true);
+  const brickBuilding = mkBuilding(pool.card('foundry'), [pool.material('Brick')], false);
+  const concreteBuilding = mkBuilding(pool.card('road'), [], false);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Brick'), pool.material('Concrete'), pool.material('Concrete')];
+  return {
+    name: 'Quarry power (Craftsman)',
+    description: 'Player 0 has Quarry — complete Foundry to get a free Craftsman action on Road',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [quarryBuilding, brickBuilding, concreteBuilding], hand: p0Hand },
+      {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Encampment power — start building of same type after completion */
+export function encampmentPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const encampmentBuilding = mkBuilding(pool.card('encampment'), [pool.card('barracks')], true);
+  const woodBuilding = mkBuilding(pool.card('crane'), [], false);
+  pool.returnCards(state.players[0]!.hand);
+  const p0Hand = [pool.material('Wood'), pool.card('dock'), pool.card('market')];
+  return {
+    name: 'Encampment power (start)',
+    description: 'Player 0 has Encampment — complete Crane to start another Wood building free',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [encampmentBuilding, woodBuilding], hand: p0Hand },
+      {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Scriptorium power — Craftsman/Laborer can use pool cards */
+export function scriptoriumPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const scripBuilding = mkBuilding(pool.card('scriptorium'), [pool.card('quarry')], true);
+  const brickBuilding = mkBuilding(pool.card('foundry'), [], false);
+  const concreteBuilding = mkBuilding(pool.card('road'), [], false);
+  const gamePool = [pool.material('Brick'), pool.material('Concrete'), pool.material('Wood')];
+  return {
+    name: 'Scriptorium power (Craftsman)',
+    description: 'Player 0 has Scriptorium — can add materials from pool to buildings during Craftsman/Laborer',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [scripBuilding, brickBuilding, concreteBuilding] },
+      {},
+    ], gamePool), 'Craftsman'),
   };
 }
 
@@ -752,4 +763,12 @@ export const SCENARIOS: Scenario[] = [
   cranePower(),
   palisadePower(),
   archwayPower(),
+  vatPower(),
+  fortressPower(),
+  barracksPower(),
+  bridgePower(),
+  junkyardPower(),
+  quarryPower(),
+  encampmentPower(),
+  scriptoriumPower(),
 ];
