@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { GameState, GameAction, MaterialType } from '../game/types';
-import { getActivePlayerId, getAvailableActions } from '../game/engine';
+import { getActivePlayerId, getAvailableActions, getEffectiveHandLimit } from '../game/engine';
 import { getCardDef, MATERIAL_COLORS, isJackCard } from '../game/cards';
 import { SCENARIOS } from '../game/scenarios';
 import { PhaseIndicator } from './PhaseIndicator';
@@ -74,6 +74,28 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
         setSelectedBuildingIndex(uniqueBuildings[0]!);
       }
     }
+
+    // Bath Craftsman pending ability
+    if (actions.pendingAbilityKind === 'bath' && actions.bathRole === 'Craftsman') {
+      const matchingBuildings = actions.craftsmanOptions
+        .filter(o => o.cardUid === selectedCardUid)
+        .map(o => o.buildingIndex);
+      const uniqueBuildings = [...new Set(matchingBuildings)];
+      if (uniqueBuildings.length === 1) {
+        setSelectedBuildingIndex(uniqueBuildings[0]!);
+      }
+    }
+
+    // Amphitheatre Craftsman pending ability
+    if (actions.pendingAbilityKind === 'amphitheatre') {
+      const matchingBuildings = actions.abilityCraftsmanOptions
+        .filter(o => o.cardUid === selectedCardUid && !o.fromPool)
+        .map(o => o.buildingIndex);
+      const uniqueBuildings = [...new Set(matchingBuildings)];
+      if (uniqueBuildings.length === 1) {
+        setSelectedBuildingIndex(uniqueBuildings[0]!);
+      }
+    }
   }, [selectedCardUid, state]);
 
   // Compute highlighted cards and buildings based on current phase & available actions
@@ -138,6 +160,36 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
       }
     } else if (actions.pendingAbilityKind === 'encampment') {
       for (const o of actions.encampmentOptions) cardUids.add(o.cardUid);
+    } else if (actions.pendingAbilityKind === 'amphitheatre') {
+      for (const o of actions.abilityCraftsmanOptions) {
+        if (!o.fromPool) cardUids.add(o.cardUid);
+        buildingIndices.add(o.buildingIndex);
+      }
+    } else if (actions.pendingAbilityKind === 'bath') {
+      if (actions.bathRole === 'Architect') {
+        for (const o of actions.architectOptions) cardUids.add(o.cardUid);
+      } else if (actions.bathRole === 'Craftsman') {
+        if (selectedCardUid !== null && selectedBuildingIndex !== null) {
+          // Both selected — highlight nothing
+        } else if (selectedCardUid !== null) {
+          for (const o of actions.craftsmanOptions) {
+            if (o.cardUid === selectedCardUid) buildingIndices.add(o.buildingIndex);
+          }
+          cardUids.add(selectedCardUid);
+        } else if (selectedBuildingIndex !== null) {
+          for (const o of actions.craftsmanOptions) {
+            if (o.buildingIndex === selectedBuildingIndex && !o.fromPool) cardUids.add(o.cardUid);
+          }
+          buildingIndices.add(selectedBuildingIndex);
+        } else {
+          for (const o of actions.craftsmanOptions) {
+            if (!o.fromPool) cardUids.add(o.cardUid);
+            buildingIndices.add(o.buildingIndex);
+          }
+        }
+      } else if (actions.bathRole === 'Legionary') {
+        for (const o of actions.legionaryOptions) cardUids.add(o.cardUid);
+      }
     }
 
     return { highlightedCardUids: cardUids, highlightedBuildingIndices: buildingIndices };
@@ -286,6 +338,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
                 player={player}
                 gameState={state}
                 isActive={isActive}
+                isLeader={player.id === state.leadPlayerIdx}
                 selectedBuildingIndex={isActive ? selectedBuildingIndex ?? undefined : undefined}
                 highlightedBuildingIndices={isActive ? highlightedBuildingIndices : undefined}
                 onSelectBuilding={
@@ -298,6 +351,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
                 highlightedCardUids={isActive ? highlightedCardUids : undefined}
                 onSelectCard={isActive ? handleSelectCard : undefined}
                 playerName={player.name}
+                refreshHandSize={getEffectiveHandLimit(state, player.id)}
               />
             </div>
           );

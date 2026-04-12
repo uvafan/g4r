@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP, getEffectiveHandLimit, hasActiveBuildingPower, getRequiredMaterials } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP, getEffectiveHandLimit, hasActiveBuildingPower, getRequiredMaterials, getPlayerActionCount, getLedRole, getPendingThinkCardCount } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
 import { seededRng, makeState, mkBuilding, updatePlayer, finalize, withActionPhase } from './stateBuilder';
@@ -45,7 +45,7 @@ describe('createInitialState', () => {
 });
 
 describe('Think action', () => {
-  it('leader think: enters thinkRound for followers', () => {
+  it('leader think: enters thinkRound for followers, cards deferred', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     // Remove some cards from player 0's hand to test draw
     const modState: GameState = {
@@ -55,25 +55,30 @@ describe('Think action', () => {
       ),
     };
     const afterLeader = gameReducer(modState, { type: 'THINK', option: { kind: 'refresh' } });
-    // Player 0 had 2 cards, should draw to 5
-    expect(afterLeader.players[0]!.hand).toHaveLength(5);
+    // Player 0 had 2 cards — hand stays at 2, 3 cards deferred
+    expect(afterLeader.players[0]!.hand).toHaveLength(2);
+    expect(afterLeader.pendingThinkCards?.[0]).toHaveLength(3);
     // Follower hasn't acted yet
     expect(afterLeader.phase.type).toBe('thinkRound');
-    // Now follower thinks
+    // Now follower thinks — this triggers advanceLeader which distributes all pending cards
     const newState = gameReducer(afterLeader, { type: 'THINK', option: { kind: 'refresh' } });
-    // Player 1 had 5 cards, should draw 1 (refresh at limit)
-    expect(newState.players[1]!.hand).toHaveLength(6);
-    // Should advance leader
     expect(newState.phase).toEqual({ type: 'lead', leaderId: 1 });
+    // After advanceLeader, pending cards are distributed into hands
+    expect(newState.players[0]!.hand).toHaveLength(5); // 2 + 3
+    expect(newState.players[1]!.hand).toHaveLength(6); // 5 + 1
+    expect(newState.pendingThinkCards).toBeUndefined();
   });
 
-  it('think at hand limit draws 1 card', () => {
+  it('think at hand limit draws 1 card (deferred)', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     const afterLeader = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
-    // Leader had 5 cards (at limit), draws 1
-    expect(afterLeader.players[0]!.hand).toHaveLength(6);
+    // Leader had 5 cards (at limit) — hand stays at 5, 1 card deferred
+    expect(afterLeader.players[0]!.hand).toHaveLength(5);
+    expect(afterLeader.pendingThinkCards?.[0]).toHaveLength(1);
     // Follower thinks too
     const newState = gameReducer(afterLeader, { type: 'THINK', option: { kind: 'refresh' } });
+    // After advanceLeader, both get their deferred cards
+    expect(newState.players[0]!.hand).toHaveLength(6);
     expect(newState.players[1]!.hand).toHaveLength(6);
   });
 });
@@ -879,7 +884,7 @@ describe('Generic supply', () => {
 });
 
 describe('Think options', () => {
-  it('think refresh: draws to hand limit', () => {
+  it('think refresh: defers cards (draws to hand limit at round end)', () => {
     let state = createInitialState(2, ['A', 'B'], seededRng(42));
     // Reduce player 0's hand to 2
     state = {
@@ -889,10 +894,12 @@ describe('Think options', () => {
       ),
     };
     const newState = gameReducer(state, { type: 'THINK', option: { kind: 'refresh' } });
-    expect(newState.players[0]!.hand).toHaveLength(5);
+    // Hand stays at 2, 3 cards deferred
+    expect(newState.players[0]!.hand).toHaveLength(2);
+    expect(newState.pendingThinkCards?.[0]).toHaveLength(3);
   });
 
-  it('think draw1: draws exactly 1 card from deck', () => {
+  it('think draw1: defers exactly 1 card from deck', () => {
     let state = createInitialState(2, ['A', 'B'], seededRng(42));
     // Reduce player 0's hand to 2
     state = {
@@ -902,24 +909,26 @@ describe('Think options', () => {
       ),
     };
     const afterLeader = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
-    // Leader draws exactly 1 (not refresh to 5), so hand goes from 2 -> 3
-    expect(afterLeader.players[0]!.hand).toHaveLength(3);
+    // Leader hand stays at 2, 1 card deferred
+    expect(afterLeader.players[0]!.hand).toHaveLength(2);
+    expect(afterLeader.pendingThinkCards?.[0]).toHaveLength(1);
     // Follower hasn't acted yet (thinkRound phase)
     expect(afterLeader.phase.type).toBe('thinkRound');
   });
 
-  it('think generic: draws from generic supply', () => {
+  it('think generic: defers generic card from supply', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     const newState = gameReducer(state, {
       type: 'THINK',
       option: { kind: 'generic', material: 'Brick' },
     });
-    // Player 0 should have 6 cards (5 + 1 generic)
-    expect(newState.players[0]!.hand).toHaveLength(6);
+    // Player 0 hand unchanged, 1 card deferred
+    expect(newState.players[0]!.hand).toHaveLength(5);
+    expect(newState.pendingThinkCards?.[0]).toHaveLength(1);
     // Generic supply decremented
     expect(newState.genericSupply.Brick).toBe(8);
-    // The new card should be a generic brick
-    const newCard = newState.players[0]!.hand[5]!;
+    // The deferred card should be a generic brick
+    const newCard = newState.pendingThinkCards![0]![0]!;
     expect(isGenericCard(newCard)).toBe(true);
     expect(getCardDef(newCard).material).toBe('Brick');
     // nextUid incremented
@@ -1159,14 +1168,15 @@ describe('Jack pile', () => {
     expect(state5.jackPile).toBe(7); // 5+2
   });
 
-  it('think jack: draws a Jack card and decrements pile', () => {
+  it('think jack: defers a Jack card and decrements pile', () => {
     const state = createInitialState(2, ['A', 'B'], seededRng(42));
     const newState = gameReducer(state, { type: 'THINK', option: { kind: 'jack' } });
     expect(newState.jackPile).toBe(3);
-    // Leader gets the jack
-    expect(newState.players[0]!.hand).toHaveLength(6);
-    const lastCard = newState.players[0]!.hand[5]!;
-    expect(isJackCard(lastCard)).toBe(true);
+    // Leader hand unchanged, jack is deferred
+    expect(newState.players[0]!.hand).toHaveLength(5);
+    expect(newState.pendingThinkCards?.[0]).toHaveLength(1);
+    const deferredCard = newState.pendingThinkCards![0]![0]!;
+    expect(isJackCard(deferredCard)).toBe(true);
   });
 
   it('think jack: does nothing if pile is empty', () => {
@@ -3085,7 +3095,7 @@ describe('Cross power (+1 Refresh Hand Size)', () => {
     expect(getEffectiveHandLimit(s, 1)).toBe(5);
   });
 
-  it('refresh draws up to 6 with Cross', () => {
+  it('refresh defers 4 cards with Cross (hand limit 6)', () => {
     const { state, uids } = makeState(2, ['A', 'B'], 42);
     const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
     let s = finalize(state, uids);
@@ -3097,8 +3107,9 @@ describe('Cross power (+1 Refresh Hand Size)', () => {
     });
     s = { ...s, phase: { type: 'lead', leaderId: 0 } };
     const result = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' } });
-    // Should draw 4 cards to reach hand limit of 6
-    expect(result.players[0]!.hand).toHaveLength(6);
+    // Hand stays at 2, 4 cards deferred to reach limit of 6
+    expect(result.players[0]!.hand).toHaveLength(2);
+    expect(result.pendingThinkCards?.[0]).toHaveLength(4);
   });
 
   it('incomplete Cross does not increase hand limit', () => {
@@ -3977,10 +3988,16 @@ describe('Quarry power (free Craftsman after building completion)', () => {
     s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
     expect(s.players[0]!.buildings[1]!.completed).toBe(true);
 
-    // Quarry should trigger
+    // Foundry's own completion triggers first, then Quarry
     const phase = s.phase as any;
     expect(phase.pendingAbilities).toBeDefined();
-    expect(phase.pendingAbilities[0].kind).toBe('quarry');
+    expect(phase.pendingAbilities.some((a: any) => a.kind === 'quarry')).toBe(true);
+
+    // Resolve foundry first (skip or activate), then quarry is active
+    const actions0 = getAvailableActions(s);
+    if (actions0.pendingAbilityKind === 'foundry') {
+      s = gameReducer(s, { type: 'SKIP_ACTION' });
+    }
 
     // Available actions should include quarry craftsman options for Road (Concrete)
     const actions = getAvailableActions(s);
@@ -4015,7 +4032,8 @@ describe('Quarry power (free Craftsman after building completion)', () => {
     expect(s.players[0]!.buildings[1]!.completed).toBe(true);
     const actionPhase = s.phase as { type: 'action'; pendingAbilities?: any[] };
     expect(actionPhase.pendingAbilities).toBeDefined();
-    expect(actionPhase.pendingAbilities![0]!.kind).toBe('quarry');
+    // Foundry's own completion ability may come first, but quarry should be present
+    expect(actionPhase.pendingAbilities!.some(a => a.kind === 'quarry')).toBe(true);
   });
 
   it('QUARRY_CRAFTSMAN adds material from hand to building', () => {
@@ -4272,5 +4290,1194 @@ describe('Pending abilities: skip and chaining', () => {
     const kinds = actionPhase.pendingAbilities!.map(a => a.kind);
     expect(kinds).toContain('quarry');
     expect(kinds).toContain('encampment');
+  });
+});
+
+// === BRICK BUILDINGS ===
+
+describe('Shrine power (+2 Refresh Hand Size)', () => {
+  it('increases hand limit by 2', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const building = mkBuilding(uids.card('shrine'), [uids.material('Brick'), uids.material('Brick')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [building], influence: 2 });
+    expect(getEffectiveHandLimit(s, 0)).toBe(7); // 5 base + 2 shrine
+  });
+
+  it('stacks with Cross', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const shrine = mkBuilding(uids.card('shrine'), [uids.material('Brick'), uids.material('Brick')], true);
+    const cross = mkBuilding(uids.card('cross'), [uids.material('Wood')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [shrine, cross], influence: 3 });
+    expect(getEffectiveHandLimit(s, 0)).toBe(8); // 5 + 2 + 1
+  });
+
+  it('refresh defers 6 cards with Cross+Shrine (hand limit 8, 2 in hand)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const shrine = mkBuilding(uids.card('shrine'), [uids.material('Brick'), uids.material('Brick')], true);
+    const cross = mkBuilding(uids.card('cross'), [uids.material('Wood')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [shrine, cross],
+      influence: 3,
+      hand: s.players[0]!.hand.slice(0, 2),
+    });
+    s = { ...s, phase: { type: 'lead', leaderId: 0 } };
+    const result = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' } });
+    // Hand stays at 2, 6 cards deferred to reach limit of 8
+    expect(result.players[0]!.hand).toHaveLength(2);
+    expect(result.pendingThinkCards?.[0]).toHaveLength(6);
+  });
+});
+
+describe('Foundry power (on completion: pool/hand to stockpile)', () => {
+  it('triggers pending foundry ability on completion', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const foundryBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [foundryBuilding],
+      hand: [brickCard, ...s.players[0]!.hand.slice(0, 3)],
+    });
+    s = { ...s, pool: [uids.material('Rubble')], sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: brickCard.uid });
+    expect(s.players[0]!.buildings[0]!.completed).toBe(true);
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'foundry')).toBe(true);
+  });
+
+  it('FOUNDRY_ACTIVATE moves pool and hand to stockpile', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const foundry = mkBuilding(uids.card('foundry'), [uids.material('Brick'), uids.material('Brick')], true);
+    const jack: Card = { uid: uids.next(), defId: 'jack' };
+    const woodCard = uids.material('Wood');
+    const poolCard = uids.material('Rubble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [foundry], hand: [jack, woodCard], influence: 2 });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Laborer');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'foundry' }] } };
+    s = gameReducer(s, { type: 'FOUNDRY_ACTIVATE', takePool: true, takeHand: true });
+    // Pool cards + non-jack hand cards → stockpile; Jacks → jack pile
+    expect(s.players[0]!.stockpile).toHaveLength(2); // poolCard + woodCard
+    expect(s.players[0]!.hand).toHaveLength(0);
+    expect(s.pool).toHaveLength(0);
+  });
+});
+
+describe('School power (on completion: Think per influence)', () => {
+  it('triggers school with remainingThinks = influence', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const schoolBuilding = mkBuilding(uids.card('school'), [uids.material('Brick')], false);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [barracks, schoolBuilding],
+      hand: [brickCard],
+      influence: 1,
+    });
+    s = { ...s, sites: { ...s.sites, Rubble: s.sites.Rubble - 1, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    const phase = s.phase as any;
+    const schoolAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'school');
+    expect(schoolAbility).toBeDefined();
+    // influence = 1 (barracks) + 2 (school) = 3
+    expect(schoolAbility.remainingThinks).toBe(3);
+  });
+});
+
+describe('Stage power (after Patron: Think)', () => {
+  it('triggers think after Patron hire', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const stageBuilding = mkBuilding(uids.card('stage'), [uids.material('Brick'), uids.material('Brick')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [stageBuilding], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood' });
+    // Stage should trigger
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'stage')).toBe(true);
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('stage');
+    expect(actions.abilityThinkOptions.canDraw1).toBe(true);
+  });
+
+  it('ABILITY_THINK resolves stage', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const stageBuilding = mkBuilding(uids.card('stage'), [uids.material('Brick'), uids.material('Brick')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [stageBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'stage' }] } };
+    const handBefore = s.players[0]!.hand.length;
+    s = gameReducer(s, { type: 'ABILITY_THINK', option: { kind: 'draw1' } });
+    expect(s.players[0]!.hand.length).toBe(handBefore + 1);
+  });
+});
+
+describe('Atrium power (Merchant: deck to vault)', () => {
+  it('takes top of deck into vault face-down', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const atriumBuilding = mkBuilding(uids.card('atrium'), [uids.material('Brick'), uids.material('Brick')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [atriumBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Merchant');
+    const deckBefore = s.deck.length;
+    const vaultBefore = s.players[0]!.vault.length;
+    const actions = getAvailableActions(s);
+    expect(actions.atriumAvailable).toBe(true);
+    s = gameReducer(s, { type: 'ATRIUM_MERCHANT' });
+    expect(s.players[0]!.vault.length).toBe(vaultBefore + 1);
+    expect(s.deck.length).toBe(deckBefore - 1);
+    // Card should be face-down
+    const atriumCard = s.players[0]!.vault[s.players[0]!.vault.length - 1]!;
+    expect(atriumCard.faceDown).toBe(true);
+  });
+
+  it('face-down vault card is hidden from VP breakdown during game', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const atriumBuilding = mkBuilding(uids.card('atrium'), [uids.material('Brick'), uids.material('Brick')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [atriumBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Merchant');
+    s = gameReducer(s, { type: 'ATRIUM_MERCHANT' });
+
+    // During action phase, face-down card should be hidden
+    const vp = calculateVP(s, 0);
+    expect(vp.vaultFaceDownCount).toBe(1);
+    expect(vp.vault).toBe(0); // hidden card not counted in visible vault VP
+
+    // At game over, face-down cards are revealed
+    const gameOverState = { ...s, phase: { type: 'gameOver' as const } };
+    const vpRevealed = calculateVP(gameOverState, 0);
+    expect(vpRevealed.vaultFaceDownCount).toBe(0);
+    expect(vpRevealed.vault).toBeGreaterThan(0); // now counted
+  });
+});
+
+describe('Bar power (after Patron: reveal deck top)', () => {
+  it('triggers bar after Patron hire (card not yet flipped)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood' });
+    const phase = s.phase as any;
+    const barAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'bar');
+    expect(barAbility).toBeDefined();
+    expect(barAbility.revealedCard).toBeNull(); // not yet flipped
+  });
+
+  it('BAR_FLIP reveals the top card', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'bar', revealedCard: null }] } };
+    const topCard = s.deck[0]!;
+    s = gameReducer(s, { type: 'BAR_FLIP' });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities[0].revealedCard).toEqual(topCard);
+  });
+
+  it('BAR_CHOOSE puts flipped card to clientele', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'bar', revealedCard: null }] } };
+    // Flip first
+    s = gameReducer(s, { type: 'BAR_FLIP' });
+    const clienteleBefore = s.players[0]!.clientele.length;
+    s = gameReducer(s, { type: 'BAR_CHOOSE', toClientele: true });
+    expect(s.players[0]!.clientele.length).toBe(clienteleBefore + 1);
+  });
+
+  it('bar is skippable before flip (decline to use)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'bar', revealedCard: null }] } };
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('bar');
+    expect(actions.canSkip).toBe(true);
+  });
+
+  it('bar is not skippable once card is flipped', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const topCard = s.deck[0]!;
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'bar', revealedCard: topCard }] } };
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('bar');
+    expect(actions.canSkip).toBe(false);
+  });
+
+  it('triggers bar when skipping Patron action (no hire)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, pool: [], sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    // Skip the patron action without hiring
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities).toBeDefined();
+    const barAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'bar');
+    expect(barAbility).toBeDefined();
+    expect(barAbility.revealedCard).toBeNull(); // not yet flipped
+  });
+
+  it('skipping Patron with Bar then flip then choose clientele works', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barBuilding = mkBuilding(uids.card('bar'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [barBuilding], influence: 2 });
+    s = { ...s, pool: [], sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const clienteleBefore = s.players[0]!.clientele.length;
+    // Skip patron
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    expect((s.phase as any).pendingAbilities?.[0]?.kind).toBe('bar');
+    // Flip
+    s = gameReducer(s, { type: 'BAR_FLIP' });
+    // Choose clientele
+    s = gameReducer(s, { type: 'BAR_CHOOSE', toClientele: true });
+    expect(s.players[0]!.clientele.length).toBe(clienteleBefore + 1);
+  });
+});
+
+describe('Bath power (after Patron: hired client acts)', () => {
+  it('triggers bath with Craftsman role when hiring Wood', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bathBuilding = mkBuilding(uids.card('bath'), [uids.material('Brick'), uids.material('Brick')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [bathBuilding], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood' });
+    const phase = s.phase as any;
+    const bathAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'bath');
+    expect(bathAbility).toBeDefined();
+    expect(bathAbility.role).toBe('Craftsman');
+  });
+
+  it('allows Craftsman action after Bath triggers from Wood hire', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bathBuilding = mkBuilding(uids.card('bath'), [uids.material('Brick'), uids.material('Brick')], true);
+    const craneBuilding = mkBuilding(uids.card('crane'), [], false);
+    const poolCard = uids.material('Wood');
+    const woodInHand = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [bathBuilding, craneBuilding], hand: [woodInHand], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1, Wood: s.sites.Wood - 1 } };
+    s = withActionPhase(s, 'Patron');
+    // Hire Wood from pool
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood' });
+    // Bath should trigger with Craftsman
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.[0]?.kind).toBe('bath');
+    expect(phase.pendingAbilities?.[0]?.role).toBe('Craftsman');
+    // getAvailableActions should offer craftsman options
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('bath');
+    expect(actions.bathRole).toBe('Craftsman');
+    expect(actions.craftsmanOptions.length).toBeGreaterThan(0);
+    // Should be able to add Wood from hand to Crane (building index 1)
+    const opt = actions.craftsmanOptions.find(o => o.cardUid === woodInHand.uid && o.buildingIndex === 1);
+    expect(opt).toBeDefined();
+    // Dispatch CRAFTSMAN_ADD
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodInHand.uid });
+    // Crane should now have material and be complete (cost 1)
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+  });
+
+  it('does not trigger for Patron hire (Marble)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bathBuilding = mkBuilding(uids.card('bath'), [uids.material('Brick'), uids.material('Brick')], true);
+    const poolCard = uids.material('Marble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [bathBuilding], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Patron');
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Marble' });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'bath')).toBeFalsy();
+  });
+});
+
+describe('Academy power (Think after Craftsman turn)', () => {
+  it('triggers academy think when player actually places material', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const academyBuilding = mkBuilding(uids.card('academy'), [uids.material('Brick'), uids.material('Brick')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [academyBuilding, brickBuilding],
+      hand: [brickCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 2 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Actually place material
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    // Academy should trigger at end of Craftsman turn
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'academy')).toBe(true);
+  });
+
+  it('does NOT trigger academy when player skips Craftsman action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const academyBuilding = mkBuilding(uids.card('academy'), [uids.material('Brick'), uids.material('Brick')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [academyBuilding],
+      hand: [],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 2 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Skip without placing material
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    // Should go straight to next leader, no academy trigger
+    expect(s.phase.type).toBe('lead');
+  });
+
+  it('academy think only fires once, not unlimited times', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const academyBuilding = mkBuilding(uids.card('academy'), [uids.material('Brick'), uids.material('Brick')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [academyBuilding, brickBuilding],
+      hand: [brickCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 2 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Actually place material to trigger Academy
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    expect((s.phase as any).pendingAbilities?.some((a: any) => a.kind === 'academy')).toBe(true);
+    // Use the academy think
+    s = gameReducer(s, { type: 'ABILITY_THINK', option: { kind: 'draw1' } });
+    // Should advance to next leader, not re-trigger academy
+    expect(s.phase.type).toBe('lead');
+  });
+
+  it('triggers academy immediately after player 0 places material, before player 1 acts', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const academyBuilding = mkBuilding(uids.card('academy'), [uids.material('Brick'), uids.material('Brick')], true);
+    const craneBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [academyBuilding, craneBuilding],
+      hand: [woodCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 2, Wood: s.sites.Wood - 1 } };
+    // Both players are actors (player 1 followed)
+    s = withActionPhase(s, 'Craftsman', [0, 1]);
+    // Player 0 places material on Crane — Academy triggers immediately (before player 1)
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'academy')).toBe(true);
+    expect(phase.actors[phase.currentActorIndex]).toBe(0); // Academy slot is for player 0
+    // Player 0 uses academy think (deferred)
+    s = gameReducer(s, { type: 'ABILITY_THINK', option: { kind: 'draw1' } });
+    // Now it's player 1's turn (not end of round yet)
+    expect(s.phase.type).toBe('action');
+    expect((s.phase as any).actors[(s.phase as any).currentActorIndex]).toBe(1);
+    // Think card is pending, not in hand yet
+    expect(s.pendingThinkCards?.[0]).toHaveLength(1);
+    // Player 1 skips
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    // Now round ends, pending cards distributed
+    expect(s.phase.type).toBe('lead');
+    expect(s.pendingThinkCards).toBeUndefined();
+    expect(s.players[0]!.hand.length).toBe(1); // deferred card now in hand
+  });
+
+  it('academy think cards go to pending pile, not directly to hand', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const academyBuilding = mkBuilding(uids.card('academy'), [uids.material('Brick'), uids.material('Brick')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [uids.material('Brick')], false);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [academyBuilding, brickBuilding],
+      hand: [brickCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 2 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Place material to trigger Academy
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: brickCard.uid });
+    // Use academy think — card should be deferred
+    s = gameReducer(s, { type: 'ABILITY_THINK', option: { kind: 'draw1' } });
+    // After advanceLeader distributes pending cards, player should have the card in hand
+    expect(s.phase.type).toBe('lead');
+    expect(s.players[0]!.hand.length).toBe(1);
+    // pendingThinkCards should have been cleared
+    expect(s.pendingThinkCards).toBeUndefined();
+  });
+});
+
+describe('Circus Maximus power (double clients)', () => {
+  it('gains extra generic client on Patron hire', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick'), uids.material('Brick')], true);
+    const building2 = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [cmBuilding, building2], influence: 3 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const supplyBefore = s.genericSupply.Wood;
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood', circusMaximus: true });
+    // Should have 2 clients: the hired one + 1 generic from supply
+    expect(s.players[0]!.clientele).toHaveLength(2);
+    expect(s.genericSupply.Wood).toBe(supplyBefore - 1);
+  });
+
+  it('does not gain extra client when circusMaximus flag is not set', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick'), uids.material('Brick')], true);
+    const building2 = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [cmBuilding, building2], influence: 3 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const supplyBefore = s.genericSupply.Wood;
+    s = gameReducer(s, { type: 'PATRON_HIRE', material: 'Wood' });
+    // Should have only 1 client — no CM bonus
+    expect(s.players[0]!.clientele).toHaveLength(1);
+    expect(s.genericSupply.Wood).toBe(supplyBefore);
+  });
+
+  it('circusMaximusAvailable shown in getAvailableActions', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick'), uids.material('Brick')], true);
+    const building2 = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [cmBuilding, building2], influence: 3 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const actions = getAvailableActions(s);
+    expect(actions.circusMaximusAvailable).toBe(true);
+    expect(actions.patronOptions).toContain('Wood');
+  });
+});
+
+describe('Circus Maximus completion (choose client subset)', () => {
+  it('triggers pending ability with client materials on completion', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick')], false);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const brickCard = uids.material('Brick');
+    const woodClient = uids.generic('Wood');
+    const concreteClient = uids.generic('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [cmBuilding, barracks],
+      hand: [brickCard],
+      clientele: [woodClient, concreteClient],
+      influence: 3,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Complete CM by adding second Brick material
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: brickCard.uid });
+    // Should now have a pending ability for CM completion
+    expect(s.phase.type).toBe('action');
+    if (s.phase.type === 'action') {
+      expect(s.phase.pendingAbilities?.[0]?.kind).toBe('circus_maximus_completion');
+    }
+    const actions = getAvailableActions(s);
+    expect(actions.pendingAbilityKind).toBe('circus_maximus_completion');
+    expect(actions.circusMaximusCompletionMaterials).toContain('Wood');
+    expect(actions.circusMaximusCompletionMaterials).toContain('Concrete');
+  });
+
+  it('allows choosing a subset of clients to duplicate', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick')], false);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const brickCard = uids.material('Brick');
+    const woodClient = uids.generic('Wood');
+    const concreteClient = uids.generic('Concrete');
+    const stoneClient = uids.generic('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [cmBuilding, barracks],
+      hand: [brickCard],
+      clientele: [woodClient, concreteClient, stoneClient],
+      influence: 4,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    const woodSupplyBefore = s.genericSupply.Wood;
+    const stoneSupplyBefore = s.genericSupply.Stone;
+    const concreteSupplyBefore = s.genericSupply.Concrete;
+    // Complete CM
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: brickCard.uid });
+    // Choose only Wood and Stone (skip Concrete)
+    s = gameReducer(s, { type: 'CIRCUS_MAXIMUS_CHOOSE', materials: ['Wood', 'Stone'] });
+    // Should have 5 clients: 3 original + 2 duplicated
+    expect(s.players[0]!.clientele).toHaveLength(5);
+    expect(s.genericSupply.Wood).toBe(woodSupplyBefore - 1);
+    expect(s.genericSupply.Stone).toBe(stoneSupplyBefore - 1);
+    expect(s.genericSupply.Concrete).toBe(concreteSupplyBefore); // unchanged
+  });
+
+  it('allows choosing zero clients (skip all)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const cmBuilding = mkBuilding(uids.card('circus_maximus'), [uids.material('Brick')], false);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const brickCard = uids.material('Brick');
+    const woodClient = uids.generic('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [cmBuilding, barracks],
+      hand: [brickCard],
+      clientele: [woodClient],
+      influence: 3,
+    });
+    s = { ...s, sites: { ...s.sites, Brick: s.sites.Brick - 1, Rubble: s.sites.Rubble - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    // Complete CM
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: brickCard.uid });
+    // Choose none
+    s = gameReducer(s, { type: 'CIRCUS_MAXIMUS_CHOOSE', materials: [] });
+    // Should still have only 1 client
+    expect(s.players[0]!.clientele).toHaveLength(1);
+  });
+});
+
+// === CONCRETE BUILDINGS ===
+
+describe('Road power (any material for Stone buildings)', () => {
+  it('allows non-Stone material in Stone building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const roadBuilding = mkBuilding(uids.card('road'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const stoneBuilding = mkBuilding(uids.card('villa'), [], false);
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [roadBuilding, stoneBuilding],
+      hand: [woodCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    const actions = getAvailableActions(s);
+    expect(actions.craftsmanOptions.some(o => o.buildingIndex === 1 && o.cardUid === woodCard.uid)).toBe(true);
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: woodCard.uid });
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+  });
+});
+
+describe('Tower power (Rubble in any structure + free OOT)', () => {
+  it('allows Rubble material in non-Rubble building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const towerBuilding = mkBuilding(uids.card('tower'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const brickBuilding = mkBuilding(uids.card('foundry'), [], false);
+    const rubbleCard = uids.material('Rubble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [towerBuilding, brickBuilding],
+      hand: [rubbleCard],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1, Brick: s.sites.Brick - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    const actions = getAvailableActions(s);
+    expect(actions.craftsmanOptions.some(o => o.buildingIndex === 1 && o.cardUid === rubbleCard.uid)).toBe(true);
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: rubbleCard.uid });
+    expect(s.players[0]!.buildings[1]!.materials).toHaveLength(1);
+  });
+
+  it('allows OOT building for 1 action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const towerBuilding = mkBuilding(uids.card('tower'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const brickCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [towerBuilding],
+      hand: [brickCard],
+      influence: 2,
+    });
+    // Fill all normal Brick sites so OOT is required
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1, Brick: 0 } };
+    s = withActionPhase(s, 'Architect');
+    const actions = getAvailableActions(s);
+    // Should have OOT option even with only 1 remaining action (Tower makes it free)
+    expect(actions.architectOptions.some(o => o.cardUid === brickCard.uid && o.outOfTown)).toBe(true);
+    s = gameReducer(s, { type: 'ARCHITECT_START', cardUid: brickCard.uid, outOfTown: true });
+    expect(s.players[0]!.buildings).toHaveLength(2);
+  });
+
+  it('OOT start with Tower costs 1 action, not 2', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const towerBuilding = mkBuilding(uids.card('tower'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const brickCard = uids.material('Brick');
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [towerBuilding],
+      hand: [brickCard, woodCard],
+      influence: 3,
+    });
+    // Fill all normal Brick and Wood sites so OOT is required
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1, Brick: 0, Wood: 0 } };
+    // Give player 0 two actions
+    s = withActionPhase(s, 'Architect', [0, 0]);
+    // Start first OOT building — should consume only 1 action
+    s = gameReducer(s, { type: 'ARCHITECT_START', cardUid: brickCard.uid, outOfTown: true });
+    expect(s.players[0]!.buildings).toHaveLength(2);
+    // Player 0 should still have 1 action remaining (not done yet)
+    expect(s.phase.type).toBe('action');
+    const actions = getAvailableActions(s);
+    // Second OOT start (different material) should also be available
+    expect(actions.architectOptions.some(o => o.cardUid === woodCard.uid && o.outOfTown)).toBe(true);
+  });
+});
+
+describe('Vomitorium power (discard hand before Think)', () => {
+  it('discards hand to pool before drawing', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const vomBuilding = mkBuilding(uids.card('vomitorium'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [vomBuilding], influence: 2 });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    const handSize = s.players[0]!.hand.length;
+    const poolSize = s.pool.length;
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' }, vomitorium: { keepJacks: true } });
+    // Hand was discarded to pool, then refreshed from deck
+    // Pool should have the old hand cards (no jacks in starting hand)
+    expect(s.pool.length).toBe(poolSize + handSize);
+  });
+});
+
+describe('Circus power (2 same-color lead/follow any role)', () => {
+  it('allows 2 same-material cards to lead any role', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const circusBuilding = mkBuilding(uids.card('circus'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const wood1 = uids.material('Wood');
+    const wood2 = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [circusBuilding],
+      hand: [wood1, wood2, ...s.players[0]!.hand.slice(0, 3)],
+      influence: 2,
+    });
+    s = { ...s, sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    const actions = getAvailableActions(s);
+    // Should have Circus lead options for all roles
+    expect(actions.leadOptions.some(o => o.cardUid === wood1.uid && o.extraCardUids?.length === 1 && o.role === 'Architect')).toBe(true);
+    expect(actions.leadOptions.some(o => o.cardUid === wood1.uid && o.extraCardUids?.length === 1 && o.role === 'Legionary')).toBe(true);
+  });
+
+  it('cannot use 2-card lead without Circus', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const wood1 = uids.material('Wood');
+    const wood2 = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { hand: [wood1, wood2, ...s.players[0]!.hand.slice(0, 3)] });
+    // Try to lead Architect with 2 Wood (no Circus)
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: wood1.uid, extraCardUids: [wood2.uid] });
+    // Should be rejected (still in lead phase)
+    expect(s.phase.type).toBe('lead');
+  });
+});
+
+describe('Amphitheatre power (on completion: Craftsman per influence)', () => {
+  it('triggers amphitheatre on completion with craftsman options', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const amphBuilding = mkBuilding(uids.card('amphitheatre'), [uids.material('Concrete')], false);
+    const concreteCard = uids.material('Concrete');
+    const woodBuilding = mkBuilding(uids.card('crane'), [], false);
+    const woodCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [barracks, amphBuilding, woodBuilding],
+      hand: [concreteCard, woodCard, ...s.players[0]!.hand.slice(0, 3)],
+      influence: 1,
+    });
+    s = { ...s, sites: { ...s.sites, Rubble: s.sites.Rubble - 1, Concrete: s.sites.Concrete - 1, Wood: s.sites.Wood - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: concreteCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    const phase = s.phase as any;
+    const amphAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'amphitheatre');
+    expect(amphAbility).toBeDefined();
+    // influence = 1 (barracks) + 2 (amphitheatre) = 3
+    expect(amphAbility.remainingActions).toBe(3);
+  });
+});
+
+describe('Aqueduct power (on completion: Patron per influence)', () => {
+  it('triggers aqueduct on completion', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const barracks = mkBuilding(uids.card('barracks'), [uids.material('Rubble')], true);
+    const aqBuilding = mkBuilding(uids.card('aqueduct'), [uids.material('Concrete')], false);
+    const concreteCard = uids.material('Concrete');
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [barracks, aqBuilding],
+      hand: [concreteCard],
+      influence: 1,
+    });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Rubble: s.sites.Rubble - 1, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 1, cardUid: concreteCard.uid });
+    expect(s.players[0]!.buildings[1]!.completed).toBe(true);
+    const phase = s.phase as any;
+    const aqAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'aqueduct');
+    expect(aqAbility).toBeDefined();
+  });
+
+  it('ABILITY_PATRON hires from pool', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const aqBuilding = mkBuilding(uids.card('aqueduct'), [uids.material('Concrete'), uids.material('Concrete')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [aqBuilding], influence: 2 });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Concrete: s.sites.Concrete - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'aqueduct', remainingActions: 2 }] } };
+    s = gameReducer(s, { type: 'ABILITY_PATRON', material: 'Wood' });
+    expect(s.players[0]!.clientele).toHaveLength(1);
+    // Should still have 1 remaining aqueduct action
+    const phase = s.phase as any;
+    const aqAbility = phase.pendingAbilities?.find((a: any) => a.kind === 'aqueduct');
+    expect(aqAbility?.remainingActions).toBe(1);
+  });
+});
+
+describe('Deferred think cards', () => {
+  it('think cards are not in hand during the action phase', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    // Give player 0 a Concrete card to lead Architect
+    const concreteCard = uids.material('Concrete');
+    let s = updatePlayer(finalize(state, uids), 0, {
+      hand: [concreteCard, ...state.players[0]!.hand.slice(1)],
+    });
+
+    // Player 0 leads Architect
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    expect(s.phase.type).toBe('follow');
+
+    // Player 1 thinks instead of following
+    const handBefore = s.players[1]!.hand.length;
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+
+    // Player 1's hand should NOT have grown — card is deferred
+    expect(s.players[1]!.hand).toHaveLength(handBefore);
+    expect(s.pendingThinkCards?.[1]).toHaveLength(1);
+
+    // During action phase, deferred cards are still not in hand
+    expect(s.phase.type).toBe('action');
+    expect(s.players[1]!.hand).toHaveLength(handBefore);
+  });
+
+  it('deferred cards merge into hand when round ends', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const concreteCard = uids.material('Concrete');
+    let s = updatePlayer(finalize(state, uids), 0, {
+      hand: [concreteCard, ...state.players[0]!.hand.slice(1)],
+    });
+
+    // Player 0 leads Architect
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    // Player 1 thinks
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+    const p1HandDuringAction = s.players[1]!.hand.length;
+
+    // Player 0 skips their architect action
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+
+    // Round ends — deferred cards should now be in hand
+    expect(s.phase.type).toBe('lead');
+    expect(s.players[1]!.hand).toHaveLength(p1HandDuringAction + 1);
+    expect(s.pendingThinkCards).toBeUndefined();
+  });
+
+  it('ability think (School) is NOT deferred', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const schoolBuilding = mkBuilding(uids.card('school'), [uids.material('Wood')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [schoolBuilding], influence: 1 });
+    s = withActionPhase(s, 'Craftsman');
+
+    // Trigger school ability
+    s = { ...s, phase: { ...s.phase as any, pendingAbilities: [{ kind: 'school', remainingThinks: 1 }] } };
+    const handBefore = s.players[0]!.hand.length;
+    s = gameReducer(s, { type: 'ABILITY_THINK', option: { kind: 'draw1' } });
+
+    // Card should go directly to hand (not deferred)
+    expect(s.players[0]!.hand).toHaveLength(handBefore + 1);
+    expect(s.pendingThinkCards?.[0]).toBeUndefined();
+  });
+});
+
+describe('Round status tracking', () => {
+  it('tracks leader lead status', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const concreteCard = uids.material('Concrete');
+    let s = updatePlayer(finalize(state, uids), 0, {
+      hand: [concreteCard, ...state.players[0]!.hand.slice(1)],
+    });
+
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    expect(s.playerRoundStatus?.[0]).toEqual({ declaration: 'lead', role: 'Architect' });
+  });
+
+  it('tracks follower follow status', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const concreteCard = uids.material('Concrete');
+    const followerConcrete = uids.material('Concrete');
+    let s = updatePlayer(finalize(state, uids), 0, {
+      hand: [concreteCard, ...state.players[0]!.hand.slice(1)],
+    });
+    s = updatePlayer(s, 1, {
+      hand: [followerConcrete, ...s.players[1]!.hand.slice(1)],
+    });
+
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    s = gameReducer(s, { type: 'FOLLOW_ROLE', cardUid: followerConcrete.uid });
+
+    expect(s.playerRoundStatus?.[0]).toEqual({ declaration: 'lead', role: 'Architect' });
+    expect(s.playerRoundStatus?.[1]).toEqual({ declaration: 'follow', role: 'Architect' });
+  });
+
+  it('tracks think status with option', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    const afterThink = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
+
+    expect(afterThink.playerRoundStatus?.[0]).toEqual({
+      declaration: 'think',
+      thinkOption: { kind: 'draw1' },
+    });
+  });
+
+  it('round status cleared after advanceLeader', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    // Both think — triggers advanceLeader
+    let s = gameReducer(state, { type: 'THINK', option: { kind: 'draw1' } });
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+
+    expect(s.phase.type).toBe('lead');
+    expect(s.playerRoundStatus).toBeUndefined();
+  });
+
+  it('getPlayerActionCount returns correct count with clients', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const concreteCard = uids.material('Concrete');
+    // Give player 1 a Concrete client (Architect)
+    const clientCard = uids.material('Concrete');
+    let s = updatePlayer(finalize(state, uids), 0, {
+      hand: [concreteCard, ...state.players[0]!.hand.slice(1)],
+    });
+    s = updatePlayer(s, 1, { clientele: [clientCard], influence: 2 });
+
+    // Player 0 leads Architect
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Architect', cardUid: concreteCard.uid });
+    // Player 1 thinks (has 1 Architect client, so still gets 1 action from clients)
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+
+    expect(getLedRole(s)).toBe('Architect');
+    // Leader led = 1 action (no clients)
+    expect(getPlayerActionCount(s, 0)).toBe(1);
+    // Player 1 thought = 0 card action + 1 client = 1 action
+    expect(getPlayerActionCount(s, 1)).toBe(1);
+  });
+
+  it('getPendingThinkCardCount returns 0 when no pending cards', () => {
+    const state = createInitialState(2, ['A', 'B'], seededRng(42));
+    expect(getPendingThinkCardCount(state, 0)).toBe(0);
+  });
+});
+
+// === STONE & MARBLE BUILDING POWERS ===
+
+describe('Temple power (+3 refresh hand size)', () => {
+  it('increases effective hand limit by 3', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [templeBuilding], influence: 3 });
+    expect(getEffectiveHandLimit(s, 0)).toBe(8);
+  });
+});
+
+describe('Villa power (+3 extra influence)', () => {
+  it('grants 6 total influence on completion', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const villaFoundation = uids.card('villa');
+    const m1 = uids.material('Stone');
+    const m2 = uids.material('Stone');
+    const m3 = uids.material('Stone');
+    const building = mkBuilding(villaFoundation, [m1, m2], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [building], hand: [m3], influence: 0 });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: m3.uid });
+    expect(s.players[0]!.buildings[0]!.completed).toBe(true);
+    expect(s.players[0]!.influence).toBe(6);
+  });
+});
+
+describe('Garden power (doubled clientele capacity)', () => {
+  it('allows more clients than influence alone', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const gardenBuilding = mkBuilding(uids.card('garden'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true);
+    const poolCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [gardenBuilding], influence: 3,
+      clientele: [uids.material('Rubble'), uids.material('Brick'), uids.material('Concrete')],
+    });
+    s = { ...s, pool: [poolCard], sites: { ...s.sites, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Patron');
+    const actions = getAvailableActions(s);
+    expect(actions.patronOptions.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Ludus Magnus power (merchant clients = all roles)', () => {
+  it('2 merchant clients add 1 bonus to every role', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const ludusBuilding = mkBuilding(uids.card('ludus_magnus'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [ludusBuilding], influence: 3,
+      clientele: [uids.material('Stone'), uids.material('Stone')],
+    });
+    expect(getClientCountForRole(s.players[0]!, 'Merchant')).toBe(3);
+    expect(getClientCountForRole(s.players[0]!, 'Laborer')).toBe(1);
+    expect(getClientCountForRole(s.players[0]!, 'Craftsman')).toBe(1);
+  });
+});
+
+describe('Library power (draw extra after Think)', () => {
+  it('draws 1 extra card from deck after thinking', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const libBuilding = mkBuilding(uids.card('library'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [libBuilding], hand: [], influence: 3 });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 }, phase: { type: 'lead', leaderId: 0 } };
+    const deckBefore = s.deck.length;
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+    const pending = s.pendingThinkCards?.[0] ?? [];
+    expect(pending.length).toBe(2);
+    expect(s.deck.length).toBe(deckBefore - 2);
+  });
+});
+
+describe('Latrine power (discard 1 before think)', () => {
+  it('discards a card to pool before thinking', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const latrineBuilding = mkBuilding(uids.card('latrine'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    const discardCard = uids.material('Rubble');
+    const keepCard = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [latrineBuilding], hand: [discardCard, keepCard], influence: 3 });
+    s = { ...s, sites: { ...s.sites, Marble: s.sites.Marble - 1 }, phase: { type: 'lead', leaderId: 0 } };
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' }, latrineCardUid: discardCard.uid });
+    expect(s.pool.some(c => c.uid === discardCard.uid)).toBe(true);
+  });
+});
+
+describe('Sewer power (lead/follow cards to stockpile)', () => {
+  it('moves lead cards to stockpile at end of round', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const sewerBuilding = mkBuilding(uids.card('sewer'), [uids.material('Stone'), uids.material('Stone'), uids.material('Stone')], true);
+    const leadCard = uids.material('Brick');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [sewerBuilding], hand: [leadCard], influence: 3 });
+    s = updatePlayer(s, 1, { hand: [] });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 }, phase: { type: 'lead', leaderId: 0 } };
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Legionary', cardUid: leadCard.uid });
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+    s = gameReducer(s, { type: 'SKIP_ACTION' });
+    expect(s.players[0]!.stockpile.some(c => c.uid === leadCard.uid)).toBe(true);
+    expect(s.pool.some(c => c.uid === leadCard.uid)).toBe(false);
+  });
+});
+
+describe('Sanctuary power (steal a client)', () => {
+  it('triggers on completion and allows stealing', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const sanctFoundation = uids.card('sanctuary');
+    const m1 = uids.material('Stone');
+    const m2 = uids.material('Stone');
+    const m3 = uids.material('Stone');
+    const building = mkBuilding(sanctFoundation, [m1, m2], false);
+    const targetClient = uids.material('Wood');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [building], hand: [m3], influence: 0 });
+    s = updatePlayer(s, 1, { clientele: [targetClient], influence: 1 });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: m3.uid });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'sanctuary')).toBe(true);
+    s = gameReducer(s, { type: 'SANCTUARY_STEAL', targetPlayerId: 1, material: 'Wood' });
+    expect(s.players[0]!.clientele.some(c => c.uid === targetClient.uid)).toBe(true);
+    expect(s.players[1]!.clientele.length).toBe(0);
+  });
+});
+
+describe('Prison power (clients to vault)', () => {
+  it('triggers on completion and allows moving clients', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const prisonFoundation = uids.card('prison');
+    const m1 = uids.material('Stone');
+    const m2 = uids.material('Stone');
+    const m3 = uids.material('Stone');
+    const building = mkBuilding(prisonFoundation, [m1, m2], false);
+    const client1 = uids.material('Rubble');
+    const client2 = uids.material('Wood');
+    const client3 = uids.material('Brick');
+    const client4 = uids.material('Concrete');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [building], hand: [m3], influence: 0, clientele: [client1, client2, client3, client4] });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: m3.uid });
+    const phase = s.phase as any;
+    const prison = phase.pendingAbilities?.find((a: any) => a.kind === 'prison');
+    expect(prison).toBeDefined();
+    expect(prison.maxCount).toBe(2);
+    s = gameReducer(s, { type: 'PRISON_MOVE', cardUids: [client1.uid] });
+    expect(s.players[0]!.vault.some(c => c.uid === client1.uid)).toBe(true);
+    expect(s.players[0]!.clientele.length).toBe(3);
+  });
+});
+
+describe('Keep power (leader for 3 turns)', () => {
+  it('sets keepTurnsRemaining on completion', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const keepFoundation = uids.card('keep');
+    const m1 = uids.material('Stone');
+    const m2 = uids.material('Stone');
+    const m3 = uids.material('Stone');
+    const building = mkBuilding(keepFoundation, [m1, m2], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [building], hand: [m3], influence: 0 });
+    s = { ...s, sites: { ...s.sites, Stone: s.sites.Stone - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    s = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: m3.uid });
+    // After round ends, Keep decrements to 2 and overrides leader
+    expect(s.keepTurnsRemaining).toBe(2);
+    expect(s.phase.type).toBe('lead');
+    expect((s.phase as any).leaderId).toBe(0);
+  });
+});
+
+describe('Basilica power (hand to vault after merchant)', () => {
+  it('triggers after merchant action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const basilicaBuilding = mkBuilding(uids.card('basilica'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    const stockCard = uids.material('Wood');
+    const handCard = uids.material('Rubble');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [basilicaBuilding], stockpile: [stockCard], hand: [handCard], influence: 3 });
+    s = { ...s, sites: { ...s.sites, Marble: s.sites.Marble - 1 } };
+    s = withActionPhase(s, 'Merchant');
+    s = gameReducer(s, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Wood' });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'basilica')).toBe(true);
+    s = gameReducer(s, { type: 'BASILICA_VAULT', cardUid: handCard.uid });
+    expect(s.players[0]!.vault.some(c => c.uid === handCard.uid)).toBe(true);
+  });
+});
+
+describe('Fountain power (flip from deck for craftsman)', () => {
+  it('flips card and allows adding to hand', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const fountainBuilding = mkBuilding(uids.card('fountain'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [fountainBuilding], hand: [], influence: 3 });
+    s = { ...s, sites: { ...s.sites, Marble: s.sites.Marble - 1 } };
+    s = withActionPhase(s, 'Craftsman');
+    const deckTop = s.deck[0]!;
+    s = gameReducer(s, { type: 'FOUNTAIN_FLIP' });
+    const phase = s.phase as any;
+    expect(phase.pendingAbilities?.some((a: any) => a.kind === 'fountain')).toBe(true);
+    s = gameReducer(s, { type: 'FOUNTAIN_CHOOSE' });
+    expect(s.players[0]!.hand.some(c => c.uid === deckTop.uid)).toBe(true);
+  });
+});
+
+describe('Palace power (multi-card lead)', () => {
+  it('gives extra actions when leading with Palace', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const palaceBuilding = mkBuilding(uids.card('palace'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    const stone1 = uids.material('Stone');
+    const stone2 = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [palaceBuilding], hand: [stone1, stone2], influence: 3 });
+    s = updatePlayer(s, 1, { hand: [] });
+    s = { ...s, sites: { ...s.sites, Marble: s.sites.Marble - 1 }, phase: { type: 'lead', leaderId: 0 } };
+    s = gameReducer(s, { type: 'LEAD_ROLE', role: 'Merchant', cardUid: stone1.uid, extraCardUids: [stone2.uid], palace: true });
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'draw1' } });
+    expect(s.phase.type).toBe('action');
+    const phase = s.phase as any;
+    expect(phase.actors.filter((a: number) => a === 0).length).toBe(2);
+  });
+});
+
+describe('Senate power (enhanced refresh)', () => {
+  it('enters multi-draw mode and completes draws', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const senateBuilding = mkBuilding(uids.card('senate'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [senateBuilding], hand: [uids.material('Rubble')], influence: 3 });
+    s = { ...s, sites: { ...s.sites, Marble: s.sites.Marble - 1 }, phase: { type: 'lead', leaderId: 0 } };
+    s = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' } });
+    expect(s.senateDrawsRemaining).toBe(4);
+    s = gameReducer(s, { type: 'SENATE_DRAW', option: { kind: 'jack' } });
+    expect(s.senateDrawsRemaining).toBe(3);
+    s = gameReducer(s, { type: 'SENATE_DRAW', option: { kind: 'draw1' } });
+    s = gameReducer(s, { type: 'SENATE_DRAW', option: { kind: 'draw1' } });
+    s = gameReducer(s, { type: 'SENATE_DRAW', option: { kind: 'draw1' } });
+    expect(s.senateDrawsRemaining).toBeUndefined();
   });
 });

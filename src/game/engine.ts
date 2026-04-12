@@ -1,8 +1,8 @@
 import {
   GameState, GameAction, Player, Phase, Sites, Building,
-  Card, MaterialType, ActiveRole, GenericSupply, ThinkOption,
+  Card, MaterialType, ActiveRole, GenericSupply, ThinkOption, PendingAbility, PlayerRoundStatus,
 } from './types';
-import { createDeck, getCardDef, CARD_DEF_MAP, MATERIAL_VALUE, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
+import { createDeck, getCardDef, CARD_DEF_MAP, MATERIAL_VALUE, MATERIAL_TO_ROLE, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
 
 const DEFAULT_HAND_LIMIT = 5;
 const SITES_PER_PLAYER = 1; // +1 is added below
@@ -95,47 +95,65 @@ export function getEffectiveHandLimit(state: GameState, playerId: number): numbe
   let limit = state.handLimit;
   const player = state.players[playerId]!;
   if (hasCompletedBuilding(player, 'cross')) limit += 1;
+  if (hasCompletedBuilding(player, 'shrine')) limit += 2;
+  if (hasActiveBuildingPower(player, 'temple')) limit += 3;
   return limit;
 }
 
-function drawCards(state: GameState, playerId: number): GameState {
-  const player = state.players[playerId]!;
-  const handLimit = getEffectiveHandLimit(state, playerId);
-  const count = player.hand.length < handLimit
-    ? handLimit - player.hand.length
-    : 1;
-  const actualCount = Math.min(count, state.deck.length);
-  const drawn = state.deck.slice(0, actualCount);
-  const remaining = state.deck.slice(actualCount);
+/** Get clientele capacity for a player, accounting for Garden (doubled) */
+export function getClienteleCapacity(player: Player): number {
+  const base = player.influence;
+  if (hasCompletedBuilding(player, 'garden')) return base * 2;
+  return base;
+}
 
+/** Check if a material card can be used to build a building of a given material type,
+ *  accounting for Road (any material → Stone) and Tower (Rubble → any) */
+export function canUseMaterialForBuilding(player: Player, cardMaterial: MaterialType, buildingMaterial: MaterialType): boolean {
+  if (cardMaterial === buildingMaterial) return true;
+  if (hasCompletedBuilding(player, 'tower') && cardMaterial === 'Rubble') return true;
+  if (hasCompletedBuilding(player, 'road') && buildingMaterial === 'Stone') return true;
+  return false;
+}
+
+function addCardsToPlayer(state: GameState, playerId: number, cards: Card[], deferred: boolean): GameState {
+  if (deferred) {
+    const existing = state.pendingThinkCards?.[playerId] ?? [];
+    return {
+      ...state,
+      pendingThinkCards: {
+        ...state.pendingThinkCards,
+        [playerId]: [...existing, ...cards],
+      },
+    };
+  }
   return {
     ...state,
-    deck: remaining,
     players: state.players.map(p =>
-      p.id === playerId
-        ? { ...p, hand: [...p.hand, ...drawn] }
-        : p
+      p.id === playerId ? { ...p, hand: [...p.hand, ...cards] } : p
     ),
   };
 }
 
-function applyThinkOption(state: GameState, playerId: number, option: ThinkOption): GameState {
+function applyThinkOption(state: GameState, playerId: number, option: ThinkOption, deferred: boolean = false): GameState {
   switch (option.kind) {
     case 'refresh': {
       // Draw from deck up to hand limit (minimum 1 if already at/above limit)
-      return drawCards(state, playerId);
+      const player = state.players[playerId]!;
+      const handLimit = getEffectiveHandLimit(state, playerId);
+      const count = player.hand.length < handLimit
+        ? handLimit - player.hand.length
+        : 1;
+      const actualCount = Math.min(count, state.deck.length);
+      const drawn = state.deck.slice(0, actualCount);
+      const remaining = state.deck.slice(actualCount);
+      return addCardsToPlayer({ ...state, deck: remaining }, playerId, drawn, deferred);
     }
     case 'draw1': {
       // Draw exactly 1 from deck
       if (state.deck.length === 0) return state;
       const drawn = state.deck[0]!;
-      return {
-        ...state,
-        deck: state.deck.slice(1),
-        players: state.players.map(p =>
-          p.id === playerId ? { ...p, hand: [...p.hand, drawn] } : p
-        ),
-      };
+      return addCardsToPlayer({ ...state, deck: state.deck.slice(1) }, playerId, [drawn], deferred);
     }
     case 'generic': {
       // Draw 1 from generic supply of chosen material
@@ -145,17 +163,14 @@ function applyThinkOption(state: GameState, playerId: number, option: ThinkOptio
         uid: state.nextUid,
         defId: genericDefIdForMaterial(material),
       };
-      return {
+      return addCardsToPlayer({
         ...state,
         nextUid: state.nextUid + 1,
         genericSupply: {
           ...state.genericSupply,
           [material]: state.genericSupply[material] - 1,
         },
-        players: state.players.map(p =>
-          p.id === playerId ? { ...p, hand: [...p.hand, newCard] } : p
-        ),
-      };
+      }, playerId, [newCard], deferred);
     }
     case 'jack': {
       if (state.jackPile <= 0) return state;
@@ -163,16 +178,23 @@ function applyThinkOption(state: GameState, playerId: number, option: ThinkOptio
         uid: state.nextUid,
         defId: 'jack',
       };
-      return {
+      return addCardsToPlayer({
         ...state,
         nextUid: state.nextUid + 1,
         jackPile: state.jackPile - 1,
-        players: state.players.map(p =>
-          p.id === playerId ? { ...p, hand: [...p.hand, newCard] } : p
-        ),
-      };
+      }, playerId, [newCard], deferred);
     }
   }
+}
+
+function setRoundStatus(state: GameState, playerId: number, status: PlayerRoundStatus): GameState {
+  return {
+    ...state,
+    playerRoundStatus: {
+      ...state.playerRoundStatus,
+      [playerId]: status,
+    },
+  };
 }
 
 function removeCardFromHand(player: Player, cardUid: number): { card: Card; newHand: Card[] } {
@@ -217,6 +239,12 @@ export function getClientCountForRole(player: Player, role: ActiveRole): number 
     }
   }
 
+  // Ludus Magnus: every 2 Merchant (Stone) clients also count as 1 client of every role
+  if (hasActiveBuildingPower(player, 'ludus_magnus')) {
+    const merchantCount = player.clientele.filter(c => getCardDef(c).material === 'Stone').length;
+    count += Math.floor(merchantCount / 2);
+  }
+
   return count;
 }
 
@@ -226,7 +254,11 @@ function buildActorsWithClients(
   leaderId: number,
   cardActorIds: number[],
 ): number[] {
-  const cardActorSet = new Set(cardActorIds);
+  // Count card actions per player (allows duplicates for Palace)
+  const cardActionCounts = new Map<number, number>();
+  for (const id of cardActorIds) {
+    cardActionCounts.set(id, (cardActionCounts.get(id) ?? 0) + 1);
+  }
   const actors: number[] = [];
 
   // Iterate in seat order starting from leader
@@ -234,7 +266,7 @@ function buildActorsWithClients(
     const playerId = (leaderId + i) % state.playerCount;
     const player = state.players[playerId]!;
     const clientActions = getClientCountForRole(player, ledRole);
-    const cardAction = cardActorSet.has(playerId) ? 1 : 0;
+    const cardAction = cardActionCounts.get(playerId) ?? 0;
     const totalActions = cardAction + clientActions;
 
     for (let j = 0; j < totalActions; j++) {
@@ -245,16 +277,64 @@ function buildActorsWithClients(
   return actors;
 }
 
+function distributePendingThinkCards(state: GameState): GameState {
+  if (!state.pendingThinkCards) return state;
+  let result = state;
+  for (const [playerIdStr, cards] of Object.entries(state.pendingThinkCards)) {
+    const playerId = Number(playerIdStr);
+    result = {
+      ...result,
+      players: result.players.map(p =>
+        p.id === playerId ? { ...p, hand: [...p.hand, ...cards] } : p
+      ),
+    };
+  }
+  return { ...result, pendingThinkCards: undefined };
+}
+
 function advanceLeader(state: GameState): GameState {
+  let withThink = distributePendingThinkCards(state);
+
+  // Sewer: move lead/follow cards to stockpile for Sewer players
+  let pendingPool = [...withThink.pendingPool];
+  const sewerTracking = withThink.roundLeadFollowCards ?? {};
+  for (const [playerIdStr, cards] of Object.entries(sewerTracking)) {
+    const playerId = Number(playerIdStr);
+    const player = withThink.players[playerId]!;
+    if (hasCompletedBuilding(player, 'sewer')) {
+      const cardUids = new Set(cards.map(c => c.uid));
+      const sewerCards = pendingPool.filter(c => cardUids.has(c.uid));
+      pendingPool = pendingPool.filter(c => !cardUids.has(c.uid));
+      withThink = updatePlayer(withThink, playerId, {
+        stockpile: [...withThink.players[playerId]!.stockpile, ...sewerCards],
+      });
+    }
+  }
+
   const merged = {
-    ...state,
-    pool: [...state.pool, ...state.pendingPool],
+    ...withThink,
+    pool: [...withThink.pool, ...pendingPool],
     pendingPool: [],
-    legionaryDemandCounts: undefined, // Reset per-round legionary tracking
+    playerRoundStatus: undefined,
+    legionaryDemandCounts: undefined,
+    roundLeadFollowCards: undefined,
   };
   if (merged.deck.length === 0 || merged.gameEndTriggered) {
     return { ...merged, phase: { type: 'gameOver' } };
   }
+
+  // Keep: override leader for next N turns
+  if (merged.keepTurnsRemaining && merged.keepTurnsRemaining > 0 && merged.keepLeaderId !== undefined) {
+    const nextLeader = merged.keepLeaderId;
+    return {
+      ...merged,
+      leadPlayerIdx: nextLeader,
+      keepTurnsRemaining: merged.keepTurnsRemaining - 1,
+      keepLeaderId: merged.keepTurnsRemaining - 1 > 0 ? merged.keepLeaderId : undefined,
+      phase: { type: 'lead', leaderId: nextLeader },
+    };
+  }
+
   const nextLeader = (state.leadPlayerIdx + 1) % state.playerCount;
   return {
     ...merged,
@@ -263,12 +343,32 @@ function advanceLeader(state: GameState): GameState {
   };
 }
 
+/** Helper to advance phase after a think action (extracted for Senate reuse) */
+function advanceAfterThink(state: GameState, phase: Phase, _playerId: number): GameState {
+  if (phase.type === 'lead') {
+    const followers = getFollowerIds(state, (phase as Phase & { type: 'lead' }).leaderId);
+    if (followers.length === 0) return advanceLeader(state);
+    return { ...state, phase: { type: 'thinkRound', leaderId: (phase as Phase & { type: 'lead' }).leaderId, followers, currentFollowerIndex: 0 } };
+  }
+  if (phase.type === 'thinkRound') {
+    const p = phase as Phase & { type: 'thinkRound' };
+    const nextIdx = p.currentFollowerIndex + 1;
+    if (nextIdx >= p.followers.length) return advanceLeader(state);
+    return { ...state, phase: { ...p, currentFollowerIndex: nextIdx } };
+  }
+  if (phase.type === 'follow') {
+    return advanceFollower(state, phase as Phase & { type: 'follow' });
+  }
+  return state;
+}
+
 function advanceFollower(state: GameState, phase: Phase & { type: 'follow' }): GameState {
   const nextIdx = phase.currentFollowerIndex + 1;
   if (nextIdx >= phase.followers.length) {
     // All followers done, move to action phase
-    // Expand actors to include client-produced actions
-    const cardActors = [phase.leaderId, ...phase.actors];
+    // Expand actors to include client-produced actions (Palace: leader may have extra card actions)
+    const leaderActions = Array(phase.leaderCardCount ?? 1).fill(phase.leaderId) as number[];
+    const cardActors = [...leaderActions, ...phase.actors];
     const actors = buildActorsWithClients(state, phase.ledRole, phase.leaderId, cardActors);
     if (actors.length === 0) {
       return advanceLeader(state);
@@ -296,6 +396,47 @@ function hasPendingAbilities(state: GameState): boolean {
   return !!p && p.length > 0;
 }
 
+/** For counted abilities (school, amphitheatre, aqueduct): decrement or resolve */
+function resolveCountedAbility(state: GameState, kind: string, remaining: number): GameState {
+  if (state.phase.type !== 'action') return state;
+  const phase = state.phase;
+  const newRemaining = remaining - 1;
+  if (newRemaining > 0) {
+    // Replace the ability with decremented count
+    const pending = phase.pendingAbilities ?? [];
+    const idx = pending.findIndex(a => a.kind === kind);
+    if (idx === -1) return resolvePendingAbility(state, kind);
+    const old = pending[idx]!;
+    const updated: PendingAbility = old.kind === 'school'
+      ? { ...old, remainingThinks: newRemaining }
+      : old.kind === 'amphitheatre'
+        ? { ...old, remainingActions: newRemaining }
+        : old.kind === 'aqueduct'
+          ? { ...old, remainingActions: newRemaining }
+          : old;
+    const newPending = [...pending.slice(0, idx), updated, ...pending.slice(idx + 1)];
+    return { ...state, phase: { ...phase, pendingAbilities: newPending } };
+  }
+  return resolvePendingAbility(state, kind);
+}
+
+/** Circus Maximus: when gaining a client, also gain one of same type from Generic Supply */
+function applyCircusMaximusGain(state: GameState, playerId: number, material: MaterialType): GameState {
+  const player = state.players[playerId]!;
+  if (!hasCompletedBuilding(player, 'circus_maximus')) return state;
+  if (player.clientele.length >= getClienteleCapacity(player)) return state;
+  if (state.genericSupply[material] <= 0) return state;
+
+  const newCard: Card = { uid: state.nextUid, defId: genericDefIdForMaterial(material) };
+  return {
+    ...updatePlayer(state, playerId, {
+      clientele: [...state.players[playerId]!.clientele, newCard],
+    }),
+    nextUid: state.nextUid + 1,
+    genericSupply: { ...state.genericSupply, [material]: state.genericSupply[material] - 1 },
+  };
+}
+
 /** Remove the first pending ability of the given kind; advance actor if none remain */
 function resolvePendingAbility(state: GameState, resolvedKind: string): GameState {
   if (state.phase.type !== 'action') return state;
@@ -307,17 +448,61 @@ function resolvePendingAbility(state: GameState, resolvedKind: string): GameStat
   if (newPending.length > 0) {
     return { ...state, phase: { ...phase, pendingAbilities: newPending } };
   }
-  return advanceActor({ ...state, phase: { ...phase, pendingAbilities: undefined } }, phase);
+  const cleanedPhase = { ...phase, pendingAbilities: undefined };
+  return advanceActor({ ...state, phase: cleanedPhase }, cleanedPhase);
 }
 
 function advanceActor(state: GameState, phase: Phase & { type: 'action' }, skip: number = 1): GameState {
   const nextIdx = phase.currentActorIndex + skip;
+
+  // Merge tracking fields from state.phase in case trackCraftsman/trackMerchant updated them
+  // after the caller captured `phase` (can't just use state.phase entirely because callers like
+  // LEGIONARY_GIVE pass a reconstructed action phase while state.phase is still legionary_demand)
+  const sp = state.phase.type === 'action' ? state.phase : phase;
+
+  // Academy: triggers at player transition (not end of all actors) so the think happens
+  // before the next player acts. Cards are deferred to pendingThinkCards like lead/follow thinks.
+  const currentPlayerId = phase.actors[phase.currentActorIndex]!;
+  const nextPlayerId = nextIdx < phase.actors.length ? phase.actors[nextIdx] : undefined;
+  if (currentPlayerId !== nextPlayerId) {
+    const craftsmen = sp.craftsmanPerformed ?? [];
+    if (craftsmen.includes(currentPlayerId) && hasCompletedBuilding(state.players[currentPlayerId]!, 'academy')) {
+      // Insert academy slot at nextIdx so it runs before the next player
+      const newActors = [...phase.actors.slice(0, nextIdx), currentPlayerId, ...phase.actors.slice(nextIdx)];
+      return {
+        ...state,
+        phase: {
+          ...phase, actors: newActors, currentActorIndex: nextIdx,
+          pendingAbilities: [{ kind: 'academy' }],
+          craftsmanPerformed: craftsmen.filter(id => id !== currentPlayerId),
+          merchantPerformed: sp.merchantPerformed,
+        },
+      };
+    }
+  }
+
   if (nextIdx >= phase.actors.length) {
+    // Basilica: after any turn with Merchant actions, players with Basilica may vault from hand
+    const merchants = sp.merchantPerformed ?? (sp.ledRole === 'Merchant' ? [...new Set(phase.actors)] : []);
+    for (const playerId of merchants) {
+      const p = state.players[playerId]!;
+      if (hasActiveBuildingPower(p, 'basilica') && p.hand.some(c => !isJackCard(c)) && p.vault.length < p.influence) {
+        const newActors = [...phase.actors, playerId];
+        return {
+          ...state,
+          phase: {
+            ...phase, actors: newActors, currentActorIndex: phase.actors.length,
+            pendingAbilities: [{ kind: 'basilica' }], merchantPerformed: [],
+          },
+        };
+      }
+    }
+
     return advanceLeader(state);
   }
   return {
     ...state,
-    phase: { ...phase, currentActorIndex: nextIdx },
+    phase: { ...phase, currentActorIndex: nextIdx, craftsmanPerformed: sp.craftsmanPerformed, merchantPerformed: sp.merchantPerformed },
   };
 }
 
@@ -343,6 +528,31 @@ function isLegionaryDemandBlocked(demandCount: number, blockers: number): boolea
   if (blockers === 0) return false;
   const interval = 1 << blockers; // 2^N
   return (demandCount % interval) !== 0;
+}
+
+/** Track that a player performed a Craftsman action (for Academy) */
+function trackCraftsman(state: GameState, playerId: number): GameState {
+  if (state.phase.type !== 'action') return state;
+  const phase = state.phase;
+  const existing = phase.craftsmanPerformed ?? [];
+  if (existing.includes(playerId)) return state;
+  return { ...state, phase: { ...phase, craftsmanPerformed: [...existing, playerId] } };
+}
+
+/** Track that a player performed a Merchant action (for Basilica) */
+function trackMerchant(state: GameState, playerId: number): GameState {
+  if (state.phase.type !== 'action') return state;
+  const phase = state.phase;
+  const existing = phase.merchantPerformed ?? [];
+  if (existing.includes(playerId)) return state;
+  return { ...state, phase: { ...phase, merchantPerformed: [...existing, playerId] } };
+}
+
+/** Track cards used to lead/follow for Sewer */
+function trackLeadFollowCards(state: GameState, playerId: number, cards: Card[]): GameState {
+  const existing = state.roundLeadFollowCards ?? {};
+  const playerCards = existing[playerId] ?? [];
+  return { ...state, roundLeadFollowCards: { ...existing, [playerId]: [...playerCards, ...cards] } };
 }
 
 function hasAnySiteForMaterial(material: MaterialType, sites: Sites, outOfTownSites: Sites): boolean {
@@ -413,9 +623,12 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     i === buildingIndex ? { ...b, completed: true } : b
   );
 
+  // Villa: +3 extra influence on top of cost-based influence
+  const extraInfluenceBonus = def.id === 'villa' ? 3 : 0;
+
   let newState = updatePlayer(state, playerId, {
     buildings: newBuildings,
-    influence: player.influence + def.cost,
+    influence: player.influence + def.cost + extraInfluenceBonus,
   });
 
   // Market: on completion, take 1 of each material type from Generic Supply into hand
@@ -450,17 +663,58 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
   }
 
   // Collect triggered abilities
-  const pendingAbilities: Array<
-    | { kind: 'quarry' }
-    | { kind: 'encampment'; material: MaterialType }
-    | { kind: 'junkyard' }
-  > = [];
+  const pendingAbilities: PendingAbility[] = [];
 
   const updatedPlayer = newState.players[playerId]!;
+
+  // Circus Maximus: upon completion, choose which existing clients to duplicate
+  if (def.id === 'circus_maximus' && updatedPlayer.clientele.length > 0) {
+    const clientMaterials = updatedPlayer.clientele.map(c => getCardDef(c).material);
+    const hasAnySupply = clientMaterials.some(mat => newState.genericSupply[mat] > 0);
+    if (hasAnySupply && updatedPlayer.clientele.length < getClienteleCapacity(updatedPlayer)) {
+      pendingAbilities.push({ kind: 'circus_maximus_completion', clientMaterials });
+    }
+  }
 
   // Junkyard: upon completion of Junkyard itself
   if (def.id === 'junkyard' && updatedPlayer.hand.length > 0) {
     pendingAbilities.push({ kind: 'junkyard' });
+  }
+
+  // Foundry: upon completion, pool and/or hand to stockpile
+  if (def.id === 'foundry') {
+    const hasPool = newState.pool.length > 0;
+    const hasHand = updatedPlayer.hand.some(c => !isJackCard(c));
+    if (hasPool || hasHand) {
+      pendingAbilities.push({ kind: 'foundry' });
+    }
+  }
+
+  // School: upon completion, Think once per influence
+  if (def.id === 'school' && updatedPlayer.influence > 0) {
+    pendingAbilities.push({ kind: 'school', remainingThinks: updatedPlayer.influence });
+  }
+
+  // Amphitheatre: upon completion, Craftsman action once per influence
+  if (def.id === 'amphitheatre' && updatedPlayer.influence > 0) {
+    // Only trigger if there are incomplete buildings with matching materials
+    const hasCraftsmanTarget = updatedPlayer.buildings.some(b => {
+      if (b.completed) return false;
+      const bMat = getCardDef(b.foundationCard).material;
+      return updatedPlayer.hand.some(c => !isJackCard(c) && canUseMaterialForBuilding(updatedPlayer, getCardDef(c).material, bMat)) ||
+             (hasCompletedBuilding(updatedPlayer, 'scriptorium') &&
+              newState.pool.some(c => canUseMaterialForBuilding(updatedPlayer, getCardDef(c).material, bMat)));
+    });
+    if (hasCraftsmanTarget) {
+      pendingAbilities.push({ kind: 'amphitheatre', remainingActions: updatedPlayer.influence });
+    }
+  }
+
+  // Aqueduct: upon completion, Patron action once per influence
+  if (def.id === 'aqueduct' && updatedPlayer.influence > 0) {
+    if (updatedPlayer.clientele.length < getClienteleCapacity(updatedPlayer) && newState.pool.length > 0) {
+      pendingAbilities.push({ kind: 'aqueduct', remainingActions: updatedPlayer.influence });
+    }
   }
 
   // Quarry: after finishing any structure, may take a Craftsman action
@@ -468,9 +722,9 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     const canCraftsman = updatedPlayer.buildings.some(b => {
       if (b.completed) return false;
       const bMat = getCardDef(b.foundationCard).material;
-      return updatedPlayer.hand.some(c => !isJackCard(c) && getCardDef(c).material === bMat) ||
+      return updatedPlayer.hand.some(c => !isJackCard(c) && canUseMaterialForBuilding(updatedPlayer, getCardDef(c).material, bMat)) ||
              (hasCompletedBuilding(updatedPlayer, 'scriptorium') &&
-              newState.pool.some(c => getCardDef(c).material === bMat));
+              newState.pool.some(c => canUseMaterialForBuilding(updatedPlayer, getCardDef(c).material, bMat)));
     });
     if (canCraftsman) {
       pendingAbilities.push({ kind: 'quarry' });
@@ -485,6 +739,29 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     if (canStart) {
       pendingAbilities.push({ kind: 'encampment', material: def.material });
     }
+  }
+
+  // Sanctuary: upon completion, steal a client from any player
+  if (def.id === 'sanctuary') {
+    const hasStealTarget = newState.players.some(p =>
+      p.id !== playerId && p.clientele.length > 0
+    ) && updatedPlayer.clientele.length < getClienteleCapacity(updatedPlayer);
+    if (hasStealTarget) {
+      pendingAbilities.push({ kind: 'sanctuary' });
+    }
+  }
+
+  // Prison: upon completion, move up to half clients to vault
+  if (def.id === 'prison') {
+    const maxCount = Math.floor(updatedPlayer.clientele.length / 2);
+    if (maxCount > 0 && updatedPlayer.vault.length < updatedPlayer.influence) {
+      pendingAbilities.push({ kind: 'prison', maxCount });
+    }
+  }
+
+  // Keep: upon completion, become leader for next 3 turns
+  if (def.id === 'keep') {
+    newState = { ...newState, keepTurnsRemaining: 3, keepLeaderId: playerId };
   }
 
   if (pendingAbilities.length > 0 && newState.phase.type === 'action') {
@@ -533,35 +810,103 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const { phase } = state;
       const { option } = action;
 
-      if (phase.type === 'lead') {
-        // Leader thinks with chosen option, then each follower picks their think option
-        const newState = applyThinkOption(state, phase.leaderId, option);
-        const followers = getFollowerIds(newState, phase.leaderId);
-        if (followers.length === 0) {
-          return advanceLeader(newState);
+      // Latrine: before thinking, optionally discard 1 card to pool
+      let preThinkState = state;
+      if (action.latrineCardUid !== undefined) {
+        const activeId = getActivePlayerId(state);
+        if (activeId !== null) {
+          const p = state.players[activeId]!;
+          if (hasActiveBuildingPower(p, 'latrine')) {
+            const cardIdx = p.hand.findIndex(c => c.uid === action.latrineCardUid);
+            if (cardIdx !== -1) {
+              const card = p.hand[cardIdx]!;
+              const newHand = [...p.hand.slice(0, cardIdx), ...p.hand.slice(cardIdx + 1)];
+              preThinkState = updatePlayer(state, activeId, { hand: newHand });
+              preThinkState = { ...preThinkState, pool: [...preThinkState.pool, card] };
+            }
+          }
         }
-        return {
-          ...newState,
-          phase: { type: 'thinkRound', leaderId: phase.leaderId, followers, currentFollowerIndex: 0 },
-        };
+      }
+
+      // Vomitorium: before thinking, optionally discard hand to pool (keep jacks or not)
+      let vomState = preThinkState;
+      if (action.vomitorium) {
+        const activeId = getActivePlayerId(preThinkState);
+        if (activeId !== null) {
+          const p = preThinkState.players[activeId]!;
+          if (hasCompletedBuilding(p, 'vomitorium')) {
+            const nonJacks = p.hand.filter(c => !isJackCard(c));
+            const jacks = p.hand.filter(c => isJackCard(c));
+            if (action.vomitorium.keepJacks) {
+              vomState = updatePlayer(preThinkState, activeId, { hand: jacks });
+              vomState = { ...vomState, pool: [...vomState.pool, ...nonJacks] };
+            } else {
+              vomState = updatePlayer(preThinkState, activeId, { hand: [] });
+              vomState = { ...vomState, pool: [...vomState.pool, ...nonJacks], jackPile: vomState.jackPile + jacks.length };
+            }
+          }
+        }
+      }
+
+      if (phase.type === 'lead') {
+        const playerId = phase.leaderId;
+
+        // Senate: multi-step refresh
+        if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[playerId]!, 'senate')) {
+          const p = vomState.players[playerId]!;
+          const handLimit = getEffectiveHandLimit(vomState, playerId);
+          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          let newState = setRoundStatus(vomState, playerId, { declaration: 'think', thinkOption: option });
+          return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: playerId, senateDeferred: true };
+        }
+
+        // Leader thinks with chosen option, then each follower picks their think option
+        let newState = applyThinkOption(vomState, playerId, option, true);
+        // Library: after thinking, draw an extra card from deck
+        if (hasCompletedBuilding(newState.players[playerId]!, 'library') && newState.deck.length > 0) {
+          newState = applyThinkOption(newState, playerId, { kind: 'draw1' }, true);
+        }
+        newState = setRoundStatus(newState, playerId, { declaration: 'think', thinkOption: option });
+        return advanceAfterThink(newState, phase, playerId);
       }
 
       if (phase.type === 'thinkRound') {
         const followerId = phase.followers[phase.currentFollowerIndex]!;
-        const newState = applyThinkOption(state, followerId, option);
-        const nextIdx = phase.currentFollowerIndex + 1;
-        if (nextIdx >= phase.followers.length) {
-          return advanceLeader(newState);
+
+        // Senate: multi-step refresh
+        if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[followerId]!, 'senate')) {
+          const p = vomState.players[followerId]!;
+          const handLimit = getEffectiveHandLimit(vomState, followerId);
+          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          let newState = setRoundStatus(vomState, followerId, { declaration: 'think', thinkOption: option });
+          return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: followerId, senateDeferred: true };
         }
-        return {
-          ...newState,
-          phase: { ...phase, currentFollowerIndex: nextIdx },
-        };
+
+        let newState = applyThinkOption(vomState, followerId, option, true);
+        if (hasCompletedBuilding(newState.players[followerId]!, 'library') && newState.deck.length > 0) {
+          newState = applyThinkOption(newState, followerId, { kind: 'draw1' }, true);
+        }
+        newState = setRoundStatus(newState, followerId, { declaration: 'think', thinkOption: option });
+        return advanceAfterThink(newState, phase, followerId);
       }
 
       if (phase.type === 'follow') {
         const followerId = phase.followers[phase.currentFollowerIndex]!;
-        let newState = applyThinkOption(state, followerId, option);
+
+        // Senate: multi-step refresh
+        if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[followerId]!, 'senate')) {
+          const p = vomState.players[followerId]!;
+          const handLimit = getEffectiveHandLimit(vomState, followerId);
+          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          let newState = setRoundStatus(vomState, followerId, { declaration: 'think', thinkOption: option });
+          return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: followerId, senateDeferred: true };
+        }
+
+        let newState = applyThinkOption(vomState, followerId, option, true);
+        if (hasCompletedBuilding(newState.players[followerId]!, 'library') && newState.deck.length > 0) {
+          newState = applyThinkOption(newState, followerId, { kind: 'draw1' }, true);
+        }
+        newState = setRoundStatus(newState, followerId, { declaration: 'think', thinkOption: option });
         // Follower does NOT become an actor
         newState = advanceFollower(newState, phase);
         return newState;
@@ -577,7 +922,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const leader = state.players[phase.leaderId]!;
       const { card, newHand } = removeCardFromHand(leader, action.cardUid);
 
-      // 3-of-a-kind: playing 3 cards of the same material as a wild
+      // Multi-card lead: 3-of-a-kind (3 same material = wild) or Circus (2 same material = wild)
       if (action.extraCardUids && action.extraCardUids.length > 0) {
         const cardDef = getCardDef(card);
         let hand = newHand;
@@ -592,33 +937,33 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         for (const ec of extraCards) {
           if (isJackCard(ec) || getCardDef(ec).material !== cardDef.material) return state;
         }
-        let newState = updatePlayer(state, phase.leaderId, { hand });
-        newState = { ...newState, pendingPool: [...newState.pendingPool, card, ...extraCards] };
-
-        const followers = getFollowerIds(state, phase.leaderId);
-        if (followers.length === 0) {
-          const actors = buildActorsWithClients(newState, action.role, phase.leaderId, [phase.leaderId]);
-          return {
-            ...newState,
-            phase: {
-              type: 'action',
-              ledRole: action.role,
-              actors,
-              currentActorIndex: 0,
-            },
-          };
+        if (action.palace) {
+          // Palace: multiple same-role cards, extra actions per card
+          if (!hasActiveBuildingPower(leader, 'palace')) return state;
+          if (cardDef.material !== ROLE_TO_MATERIAL[action.role]) return state;
+        } else {
+          // 3-of-a-kind needs exactly 2 extras; Circus needs exactly 1 extra
+          if (extraCards.length === 1 && !hasCompletedBuilding(leader, 'circus')) return state;
+          if (extraCards.length !== 1 && extraCards.length !== 2) return state;
         }
 
+        const allCards = [card, ...extraCards];
+        let newState = updatePlayer(state, phase.leaderId, { hand });
+        newState = { ...newState, pendingPool: [...newState.pendingPool, ...allCards] };
+        newState = trackLeadFollowCards(newState, phase.leaderId, allCards);
+        newState = setRoundStatus(newState, phase.leaderId, { declaration: 'lead', role: action.role });
+
+        const palaceCount = action.palace ? 1 + extraCards.length : undefined;
+        const followers = getFollowerIds(state, phase.leaderId);
+        if (followers.length === 0) {
+          const la = Array(palaceCount ?? 1).fill(phase.leaderId) as number[];
+          const actors = buildActorsWithClients(newState, action.role, phase.leaderId, la);
+          return { ...newState, phase: { type: 'action', ledRole: action.role, actors, currentActorIndex: 0 } };
+        }
         return {
           ...newState,
-          phase: {
-            type: 'follow',
-            leaderId: phase.leaderId,
-            ledRole: action.role,
-            currentFollowerIndex: 0,
-            followers,
-            actors: [],
-          },
+          phase: { type: 'follow', leaderId: phase.leaderId, ledRole: action.role,
+            currentFollowerIndex: 0, followers, actors: [], leaderCardCount: palaceCount },
         };
       }
 
@@ -634,7 +979,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         newState = { ...newState, jackPile: newState.jackPile + 1 };
       } else {
         newState = { ...newState, pendingPool: [...newState.pendingPool, card] };
+        newState = trackLeadFollowCards(newState, phase.leaderId, [card]);
       }
+      newState = setRoundStatus(newState, phase.leaderId, { declaration: 'lead', role: action.role });
 
       const followers = getFollowerIds(state, phase.leaderId);
       if (followers.length === 0) {
@@ -672,7 +1019,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const follower = state.players[followerId]!;
       const { card, newHand } = removeCardFromHand(follower, action.cardUid);
 
-      // 3-of-a-kind: playing 3 cards of the same material as a wild
+      // Multi-card follow: 3-of-a-kind, Circus, or Palace
       if (action.extraCardUids && action.extraCardUids.length > 0) {
         const cardDef = getCardDef(card);
         let hand = newHand;
@@ -682,14 +1029,27 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
           extraCards.push(result.card);
           hand = result.newHand;
         }
-        // Validate all cards are the same material (and non-jack)
         if (isJackCard(card)) return state;
         for (const ec of extraCards) {
           if (isJackCard(ec) || getCardDef(ec).material !== cardDef.material) return state;
         }
+        if (action.palace) {
+          if (!hasActiveBuildingPower(follower, 'palace')) return state;
+          if (cardDef.material !== ROLE_TO_MATERIAL[phase.ledRole]) return state;
+        } else {
+          if (extraCards.length === 1 && !hasCompletedBuilding(follower, 'circus')) return state;
+          if (extraCards.length !== 1 && extraCards.length !== 2) return state;
+        }
+
+        const allCards = [card, ...extraCards];
         let newState = updatePlayer(state, followerId, { hand });
-        newState = { ...newState, pendingPool: [...newState.pendingPool, card, ...extraCards] };
-        const newPhase = { ...phase, actors: [...phase.actors, followerId] };
+        newState = { ...newState, pendingPool: [...newState.pendingPool, ...allCards] };
+        newState = trackLeadFollowCards(newState, followerId, allCards);
+        newState = setRoundStatus(newState, followerId, { declaration: 'follow', role: phase.ledRole });
+        // Palace: add follower multiple times for extra actions
+        const numEntries = action.palace ? 1 + extraCards.length : 1;
+        const newActors = [...phase.actors, ...Array(numEntries).fill(followerId)];
+        const newPhase = { ...phase, actors: newActors };
         return advanceFollower(newState, newPhase);
       }
 
@@ -705,16 +1065,19 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         newState = { ...newState, jackPile: newState.jackPile + 1 };
       } else {
         newState = { ...newState, pendingPool: [...newState.pendingPool, card] };
+        newState = trackLeadFollowCards(newState, followerId, [card]);
       }
+      newState = setRoundStatus(newState, followerId, { declaration: 'follow', role: phase.ledRole });
 
-      // Add follower to actors list
       const newPhase = { ...phase, actors: [...phase.actors, followerId] };
       return advanceFollower(newState, newPhase);
     }
 
     case 'ARCHITECT_START': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Architect') return state;
+      if (phase.type !== 'action') return state;
+      const isBathArchitect = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Architect');
+      if (phase.ledRole !== 'Architect' && !isBathArchitect) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
@@ -730,8 +1093,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Crane cannot be used with out-of-town buildings
       if (isOutOfTown && action.craneCardUid !== undefined) return state;
 
-      // Out-of-town requires 2 actions — validate the player has enough remaining
-      if (isOutOfTown) {
+      // Tower: out-of-town is free (costs 1 action like normal)
+      const towerFreeOOT = hasCompletedBuilding(player, 'tower');
+      // Out-of-town requires 2 actions — validate the player has enough remaining (unless Tower)
+      if (isOutOfTown && !towerFreeOOT) {
         const remaining = countRemainingActions(actorId, phase.actors, phase.currentActorIndex);
         if (remaining < 2) return state;
       }
@@ -794,25 +1159,32 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         newState = completeBuildingIfReady(newState, actorId, craneBuildingIdx);
       }
 
-      // Out-of-town costs 2 actions, normal costs 1
+      // Out-of-town costs 2 actions, normal costs 1 (Tower makes OOT free)
+      const ootCost = (isOutOfTown && !towerFreeOOT) ? 2 : 1;
+      if (isBathArchitect) return resolvePendingAbility(newState, 'bath');
       if (hasPendingAbilities(newState)) return newState;
-      return advanceActor(newState, phase, isOutOfTown ? 2 : 1);
+      return advanceActor(newState, phase, ootCost);
     }
 
     case 'CRAFTSMAN_ADD': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Craftsman') return state;
+      if (phase.type !== 'action') return state;
+      const isBath = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Craftsman');
+      if (phase.ledRole !== 'Craftsman' && !isBath) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
       const building = player.buildings[action.buildingIndex];
       if (!building || building.completed) return state;
 
+      const buildingDef = getCardDef(building.foundationCard);
+
       // Scriptorium: take matching material from pool instead of hand
       if (action.fromPool) {
         if (!hasCompletedBuilding(player, 'scriptorium')) return state;
-        const buildingDef = getCardDef(building.foundationCard);
-        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === buildingDef.material);
+        const poolIdx = state.pool.findIndex(c =>
+          canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material)
+        );
         if (poolIdx === -1) return state;
         const poolCard = state.pool[poolIdx]!;
         const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
@@ -821,16 +1193,17 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         );
         let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
         newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        newState = trackCraftsman(newState, actorId);
+        if (isBath) return resolvePendingAbility(newState, 'bath');
         if (hasPendingAbilities(newState)) return newState;
         return advanceActor(newState, phase);
       }
 
       const { card, newHand } = removeCardFromHand(player, action.cardUid);
       const cardDef = getCardDef(card);
-      const buildingDef = getCardDef(building.foundationCard);
 
-      // Validate: material must match
-      if (cardDef.material !== buildingDef.material) return state;
+      // Validate: material must match (Road/Tower accounted for)
+      if (!canUseMaterialForBuilding(player, cardDef.material, buildingDef.material)) return state;
 
       const newBuildings = player.buildings.map((b, i) =>
         i === action.buildingIndex
@@ -844,13 +1217,17 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       });
 
       newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      newState = trackCraftsman(newState, actorId);
+      if (isBath) return resolvePendingAbility(newState, 'bath');
       if (hasPendingAbilities(newState)) return newState;
       return advanceActor(newState, phase);
     }
 
     case 'LABORER_POOL_TO_STOCKPILE': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Laborer') return state;
+      if (phase.type !== 'action') return state;
+      const isBathLabPool = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Laborer');
+      if (phase.ledRole !== 'Laborer' && !isBathLabPool) return state;
       if (action.materials.length === 0 || action.materials.length > 2) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
@@ -873,12 +1250,15 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         stockpile: [...player.stockpile, ...movedCards],
       });
 
+      if (isBathLabPool) return resolvePendingAbility(newState, 'bath');
       return advanceActor(newState, phase);
     }
 
     case 'LABORER_HAND_TO_STOCKPILE': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Laborer') return state;
+      if (phase.type !== 'action') return state;
+      const isBathLabHand = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Laborer');
+      if (phase.ledRole !== 'Laborer' && !isBathLabHand) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
@@ -894,12 +1274,15 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         stockpile: [...player.stockpile, card],
       });
 
+      if (isBathLabHand) return resolvePendingAbility(newState, 'bath');
       return advanceActor(newState, phase);
     }
 
     case 'LABORER_STOCKPILE_TO_BUILDING': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Laborer') return state;
+      if (phase.type !== 'action') return state;
+      const isBathLaborer = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Laborer');
+      if (phase.ledRole !== 'Laborer' && !isBathLaborer) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
@@ -907,12 +1290,14 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       if (!building || building.completed) return state;
 
       const buildingDef = getCardDef(building.foundationCard);
-      if (action.material !== buildingDef.material) return state;
+      if (!canUseMaterialForBuilding(player, action.material, buildingDef.material)) return state;
 
       // Scriptorium: take matching material from pool instead of stockpile
       if (action.fromPool) {
         if (!hasCompletedBuilding(player, 'scriptorium')) return state;
-        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
+        const poolIdx = state.pool.findIndex(c =>
+          canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material)
+        );
         if (poolIdx === -1) return state;
         const poolCard = state.pool[poolIdx]!;
         const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
@@ -921,12 +1306,13 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         );
         let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
         newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        if (isBathLaborer) return resolvePendingAbility(newState, 'bath');
         if (hasPendingAbilities(newState)) return newState;
         return advanceActor(newState, phase);
       }
 
       const stockpileIdx = player.stockpile.findIndex(
-        c => getCardDef(c).material === action.material
+        c => canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material)
       );
       if (stockpileIdx === -1) return state;
 
@@ -947,13 +1333,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       });
 
       newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      if (isBathLaborer) return resolvePendingAbility(newState, 'bath');
       if (hasPendingAbilities(newState)) return newState;
       return advanceActor(newState, phase);
     }
 
     case 'MERCHANT_STOCKPILE_TO_VAULT': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Merchant') return state;
+      if (phase.type !== 'action') return state;
+      const isBathMerchant = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Merchant');
+      if (phase.ledRole !== 'Merchant' && !isBathMerchant) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
@@ -968,12 +1357,14 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (poolIdx === -1) return state;
         const poolCard = state.pool[poolIdx]!;
         const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
-        const newState = {
+        let newState = {
           ...updatePlayer(state, actorId, {
             vault: [...player.vault, poolCard],
           }),
           pool: newPool,
         };
+        newState = trackMerchant(newState, actorId);
+        if (isBathMerchant) return resolvePendingAbility(newState, 'bath');
         return advanceActor(newState, phase);
       }
 
@@ -988,17 +1379,48 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         ...player.stockpile.slice(stockpileIdx + 1),
       ];
 
-      const newState = updatePlayer(state, actorId, {
+      let newState = updatePlayer(state, actorId, {
         stockpile: newStockpile,
         vault: [...player.vault, card],
       });
+      newState = trackMerchant(newState, actorId);
 
+      if (isBathMerchant) return resolvePendingAbility(newState, 'bath');
+      return advanceActor(newState, phase);
+    }
+
+    case 'ATRIUM_MERCHANT': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const isBathMerchant = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Merchant');
+      if (phase.ledRole !== 'Merchant' && !isBathMerchant) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (!hasCompletedBuilding(player, 'atrium')) return state;
+      if (player.vault.length >= player.influence) return state;
+      if (state.deck.length === 0) return state;
+
+      // Take top card from deck, put face-down into vault
+      const topCard = state.deck[0]!;
+      const faceDownCard = { ...topCard, faceDown: true as const };
+      let newState = {
+        ...updatePlayer(state, actorId, {
+          vault: [...player.vault, faceDownCard],
+        }),
+        deck: state.deck.slice(1),
+      };
+      newState = trackMerchant(newState, actorId);
+
+      if (isBathMerchant) return resolvePendingAbility(newState, 'bath');
       return advanceActor(newState, phase);
     }
 
     case 'LEGIONARY_REVEAL': {
       const { phase } = state;
-      if (phase.type !== 'action' || phase.ledRole !== 'Legionary') return state;
+      if (phase.type !== 'action') return state;
+      const isBathLegionary = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Legionary');
+      if (phase.ledRole !== 'Legionary' && !isBathLegionary) return state;
 
       const actorId = phase.actors[phase.currentActorIndex]!;
       const player = state.players[actorId]!;
@@ -1037,6 +1459,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
           stockpile: [...newState.players[actorId]!.stockpile, ...stolenCards],
         });
 
+        if (isBathLegionary) return resolvePendingAbility(newState, 'bath');
         return advanceActor(newState, phase);
       }
 
@@ -1091,7 +1514,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       newState = { ...newState, legionaryDemandCounts: counts };
 
       if (demandees.length === 0) {
-        // No neighbors to demand from (or all blocked), advance actor
+        if (isBathLegionary) return resolvePendingAbility(newState, 'bath');
         return advanceActor(newState, phase);
       }
 
@@ -1106,10 +1529,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
             stockpile: [...newState.players[actorId]!.stockpile, ...matching],
           });
         }
+        if (isBathLegionary) return resolvePendingAbility(newState, 'bath');
         return advanceActor(newState, phase);
       }
 
-      // Enter legionary_demand phase
+      // Enter legionary_demand phase — preserve pending abilities for return
       return {
         ...newState,
         phase: {
@@ -1119,6 +1543,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
           currentDemandeeIndex: 0,
           actionActors: phase.actors,
           actionCurrentActorIndex: phase.currentActorIndex,
+          actionPendingAbilities: phase.pendingAbilities,
+          actionCraftsmanPerformed: phase.craftsmanPerformed,
         },
       };
     }
@@ -1144,13 +1570,19 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Advance to next demandee or back to action phase
       const nextDemandeeIdx = phase.currentDemandeeIndex + 1;
       if (nextDemandeeIdx >= phase.demandees.length) {
-        // Return to action phase and advance actor
+        // Return to action phase — restore pending abilities
         const actionPhase: Phase & { type: 'action' } = {
           type: 'action',
-          ledRole: 'Legionary',
+          ledRole: phase.actionPendingAbilities?.some(a => a.kind === 'bath') ? 'Patron' as ActiveRole : 'Legionary',
           actors: phase.actionActors,
           currentActorIndex: phase.actionCurrentActorIndex,
+          pendingAbilities: phase.actionPendingAbilities,
+          craftsmanPerformed: phase.actionCraftsmanPerformed,
         };
+        // If returning from bath-legionary, resolve the bath ability
+        if (phase.actionPendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Legionary')) {
+          return resolvePendingAbility({ ...newState, phase: actionPhase }, 'bath');
+        }
         return advanceActor(newState, actionPhase);
       }
 
@@ -1168,7 +1600,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const player = state.players[actorId]!;
 
       // Clientele capacity is limited by influence
-      if (player.clientele.length >= player.influence) return state;
+      if (player.clientele.length >= getClienteleCapacity(player)) return state;
 
       const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
       if (poolIdx === -1) return state;
@@ -1176,12 +1608,47 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const card = state.pool[poolIdx]!;
       const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
 
-      const newState = {
+      let newState = {
         ...updatePlayer(state, actorId, {
           clientele: [...player.clientele, card],
         }),
         pool: newPool,
       };
+
+      // Circus Maximus: gain extra client from Generic Supply (opt-in)
+      if (action.circusMaximus) {
+        newState = applyCircusMaximusGain(newState, actorId, action.material);
+      }
+
+      // Post-Patron triggers
+      const postPatronAbilities: PendingAbility[] = [];
+      const updatedPlayer = newState.players[actorId]!;
+
+      // Stage: after Patron, may Think
+      if (hasCompletedBuilding(updatedPlayer, 'stage')) {
+        postPatronAbilities.push({ kind: 'stage' });
+      }
+
+      // Bar: after Patron, may flip top of deck → clientele or pool
+      if (hasCompletedBuilding(updatedPlayer, 'bar') && newState.deck.length > 0) {
+        postPatronAbilities.push({ kind: 'bar', revealedCard: null });
+      }
+
+      // Bath: after Patron, hired client acts (unless Patron)
+      if (hasCompletedBuilding(updatedPlayer, 'bath')) {
+        const hiredRole = MATERIAL_TO_ROLE[action.material] as ActiveRole;
+        if (hiredRole !== 'Patron') {
+          postPatronAbilities.push({ kind: 'bath', role: hiredRole });
+        }
+      }
+
+      if (postPatronAbilities.length > 0) {
+        const existing = phase.pendingAbilities ?? [];
+        return {
+          ...newState,
+          phase: { ...phase, pendingAbilities: [...existing, ...postPatronAbilities] },
+        };
+      }
 
       return advanceActor(newState, phase);
     }
@@ -1201,7 +1668,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Scriptorium: take matching material from pool
       if (action.fromPool) {
         if (!hasCompletedBuilding(player, 'scriptorium')) return state;
-        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === buildingDef.material);
+        const poolIdx = state.pool.findIndex(c =>
+          canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material)
+        );
         if (poolIdx === -1) return state;
         const poolCard = state.pool[poolIdx]!;
         const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
@@ -1215,7 +1684,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
       const { card, newHand } = removeCardFromHand(player, action.cardUid);
       const cardDef = getCardDef(card);
-      if (cardDef.material !== buildingDef.material) return state;
+      if (!canUseMaterialForBuilding(player, cardDef.material, buildingDef.material)) return state;
 
       const newBuildings = player.buildings.map((b, i) =>
         i === action.buildingIndex ? { ...b, materials: [...b.materials, card] } : b
@@ -1310,6 +1779,428 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return resolvePendingAbility(newState, 'junkyard');
     }
 
+    case 'FOUNDRY_ACTIVATE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      if (!phase.pendingAbilities?.some(a => a.kind === 'foundry')) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      let newState: GameState = state;
+
+      if (action.takePool) {
+        // Move entire pool to stockpile
+        newState = updatePlayer(newState, actorId, {
+          stockpile: [...newState.players[actorId]!.stockpile, ...newState.pool],
+        });
+        newState = { ...newState, pool: [] };
+      }
+
+      if (action.takeHand) {
+        const p = newState.players[actorId]!;
+        const nonJacks = p.hand.filter(c => !isJackCard(c));
+        const jacks = p.hand.filter(c => isJackCard(c));
+        // Non-jacks to stockpile, Jacks returned to jack pile
+        newState = updatePlayer(newState, actorId, {
+          hand: [],
+          stockpile: [...newState.players[actorId]!.stockpile, ...nonJacks],
+        });
+        newState = { ...newState, jackPile: newState.jackPile + jacks.length };
+      }
+
+      return resolvePendingAbility(newState, 'foundry');
+    }
+
+    case 'ABILITY_THINK': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+
+      if (pending.kind === 'school') {
+        let newState = applyThinkOption(state, actorId, action.option);
+        const remaining = pending.remainingThinks - 1;
+        if (remaining > 0) {
+          // Replace the school ability with decremented count
+          const newPending = [{ kind: 'school' as const, remainingThinks: remaining }, ...(phase.pendingAbilities?.slice(1) ?? [])];
+          return { ...newState, phase: { ...phase, pendingAbilities: newPending } };
+        }
+        return resolvePendingAbility(newState, 'school');
+      }
+
+      if (pending.kind === 'stage') {
+        const newState = applyThinkOption(state, actorId, action.option);
+        return resolvePendingAbility(newState, 'stage');
+      }
+
+      if (pending.kind === 'academy') {
+        // Deferred: cards go to pendingThinkCards until advanceLeader distributes them
+        const newState = applyThinkOption(state, actorId, action.option, true);
+        return resolvePendingAbility(newState, 'academy');
+      }
+
+      return state;
+    }
+
+    case 'ABILITY_CRAFTSMAN': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending || pending.kind !== 'amphitheatre') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const building = player.buildings[action.buildingIndex];
+      if (!building || building.completed) return state;
+
+      const buildingDef = getCardDef(building.foundationCard);
+
+      // Scriptorium: pool material
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'scriptorium')) return state;
+        const poolIdx = state.pool.findIndex(c =>
+          canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material)
+        );
+        if (poolIdx === -1) return state;
+        const poolCard = state.pool[poolIdx]!;
+        const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+        const newBuildings = player.buildings.map((b, i) =>
+          i === action.buildingIndex ? { ...b, materials: [...b.materials, poolCard] } : b
+        );
+        let newState = { ...updatePlayer(state, actorId, { buildings: newBuildings }), pool: newPool };
+        newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+        newState = trackCraftsman(newState, actorId);
+        return resolveCountedAbility(newState, 'amphitheatre', pending.remainingActions);
+      }
+
+      const { card, newHand } = removeCardFromHand(player, action.cardUid);
+      if (!canUseMaterialForBuilding(player, getCardDef(card).material, buildingDef.material)) return state;
+
+      const newBuildings = player.buildings.map((b, i) =>
+        i === action.buildingIndex ? { ...b, materials: [...b.materials, card] } : b
+      );
+      let newState = updatePlayer(state, actorId, { hand: newHand, buildings: newBuildings });
+      newState = completeBuildingIfReady(newState, actorId, action.buildingIndex);
+      newState = trackCraftsman(newState, actorId);
+      return resolveCountedAbility(newState, 'amphitheatre', pending.remainingActions);
+    }
+
+    case 'ABILITY_PATRON': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending || pending.kind !== 'aqueduct') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+
+      if (player.clientele.length >= getClienteleCapacity(player)) return state;
+      const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
+      if (poolIdx === -1) return state;
+
+      const card = state.pool[poolIdx]!;
+      const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+
+      let newState = {
+        ...updatePlayer(state, actorId, {
+          clientele: [...player.clientele, card],
+        }),
+        pool: newPool,
+      };
+
+      // Circus Maximus: gain extra client from generic supply (opt-in)
+      if (action.circusMaximus) {
+        newState = applyCircusMaximusGain(newState, actorId, getCardDef(card).material);
+      }
+
+      return resolveCountedAbility(newState, 'aqueduct', pending.remainingActions);
+    }
+
+    case 'BAR_FLIP': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending || pending.kind !== 'bar' || pending.revealedCard !== null) return state;
+      if (state.deck.length === 0) return state;
+
+      const revealedCard = state.deck[0]!;
+      const newPending = [{ kind: 'bar' as const, revealedCard }, ...(phase.pendingAbilities?.slice(1) ?? [])];
+      return { ...state, phase: { ...phase, pendingAbilities: newPending } };
+    }
+
+    case 'BAR_CHOOSE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending || pending.kind !== 'bar' || !pending.revealedCard) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const revealedCard = pending.revealedCard;
+
+      let newState: GameState;
+      if (action.toClientele && player.clientele.length < getClienteleCapacity(player)) {
+        // Put into clientele
+        newState = {
+          ...updatePlayer(state, actorId, {
+            clientele: [...player.clientele, revealedCard],
+          }),
+          deck: state.deck.slice(1),
+        };
+        // Circus Maximus for bar-gained client (opt-in)
+        if (action.circusMaximus) {
+          newState = applyCircusMaximusGain(newState, actorId, getCardDef(revealedCard).material);
+        }
+      } else {
+        // Put into pool
+        newState = {
+          ...state,
+          pool: [...state.pool, revealedCard],
+          deck: state.deck.slice(1),
+        };
+      }
+
+      return resolvePendingAbility(newState, 'bar');
+    }
+
+    case 'CIRCUS_MAXIMUS_CHOOSE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.[0];
+      if (!pending || pending.kind !== 'circus_maximus_completion') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      let newState = state;
+
+      // Validate: each chosen material must be available in the pending list and generic supply
+      const remainingMaterials = [...pending.clientMaterials];
+      const supplyCopy = { ...newState.genericSupply };
+      let player = newState.players[actorId]!;
+
+      for (const mat of action.materials) {
+        const idx = remainingMaterials.indexOf(mat);
+        if (idx === -1) return state; // invalid choice
+        if (supplyCopy[mat] <= 0) return state;
+        if (player.clientele.length >= getClienteleCapacity(player)) break;
+        remainingMaterials.splice(idx, 1);
+        supplyCopy[mat]--;
+
+        const newCard: Card = { uid: newState.nextUid, defId: genericDefIdForMaterial(mat) };
+        newState = {
+          ...updatePlayer(newState, actorId, {
+            clientele: [...newState.players[actorId]!.clientele, newCard],
+          }),
+          nextUid: newState.nextUid + 1,
+          genericSupply: { ...supplyCopy },
+        };
+        player = newState.players[actorId]!;
+      }
+
+      return resolvePendingAbility(newState, 'circus_maximus_completion');
+    }
+
+    case 'SANCTUARY_STEAL': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      if (!phase.pendingAbilities?.some(a => a.kind === 'sanctuary')) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (player.clientele.length >= getClienteleCapacity(player)) return state;
+
+      const target = state.players[action.targetPlayerId];
+      if (!target || action.targetPlayerId === actorId) return state;
+      const clientIdx = target.clientele.findIndex(c => getCardDef(c).material === action.material);
+      if (clientIdx === -1) return state;
+
+      const stolenCard = target.clientele[clientIdx]!;
+      let newState = updatePlayer(state, action.targetPlayerId, {
+        clientele: [...target.clientele.slice(0, clientIdx), ...target.clientele.slice(clientIdx + 1)],
+      });
+      newState = updatePlayer(newState, actorId, {
+        clientele: [...newState.players[actorId]!.clientele, stolenCard],
+      });
+      return resolvePendingAbility(newState, 'sanctuary');
+    }
+
+    case 'PRISON_MOVE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.find(a => a.kind === 'prison');
+      if (!pending || pending.kind !== 'prison') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (action.cardUids.length > pending.maxCount) return state;
+
+      // Vault capacity check
+      const availableVault = player.influence - player.vault.length;
+      if (action.cardUids.length > availableVault) return state;
+
+      const uidSet = new Set(action.cardUids);
+      const toVault = player.clientele.filter(c => uidSet.has(c.uid));
+      if (toVault.length !== action.cardUids.length) return state;
+
+      const newState = updatePlayer(state, actorId, {
+        clientele: player.clientele.filter(c => !uidSet.has(c.uid)),
+        vault: [...player.vault, ...toVault],
+      });
+      return resolvePendingAbility(newState, 'prison');
+    }
+
+    case 'BASILICA_VAULT': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      if (!phase.pendingAbilities?.some(a => a.kind === 'basilica')) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (player.vault.length >= player.influence) return state;
+
+      const { card, newHand } = removeCardFromHand(player, action.cardUid);
+      if (isJackCard(card)) return state;
+
+      const newState = updatePlayer(state, actorId, {
+        hand: newHand,
+        vault: [...player.vault, card],
+      });
+      return resolvePendingAbility(newState, 'basilica');
+    }
+
+    case 'FOUNTAIN_FLIP': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const isBathCraftsman = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Craftsman');
+      if (phase.ledRole !== 'Craftsman' && !isBathCraftsman) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (!hasActiveBuildingPower(player, 'fountain')) return state;
+      if (state.deck.length === 0) return state;
+
+      const flippedCard = state.deck[0]!;
+      const newDeck = state.deck.slice(1);
+      const existing = phase.pendingAbilities ?? [];
+      return {
+        ...state,
+        deck: newDeck,
+        phase: { ...phase, pendingAbilities: [...existing, { kind: 'fountain', flippedCard }] },
+      };
+    }
+
+    case 'FOUNTAIN_CHOOSE': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const pending = phase.pendingAbilities?.find(a => a.kind === 'fountain');
+      if (!pending || pending.kind !== 'fountain') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      const flippedCard = pending.flippedCard;
+
+      if (action.buildingIndex !== undefined) {
+        // Use as material for a building
+        const building = player.buildings[action.buildingIndex];
+        if (!building || building.completed) return state;
+        const buildingDef = getCardDef(building.foundationCard);
+        if (!canUseMaterialForBuilding(player, getCardDef(flippedCard).material, buildingDef.material)) return state;
+
+        const newBuildings = player.buildings.map((b, i) =>
+          i === action.buildingIndex ? { ...b, materials: [...b.materials, flippedCard] } : b
+        );
+        let newState = updatePlayer(state, actorId, { buildings: newBuildings });
+        newState = completeBuildingIfReady(newState, actorId, action.buildingIndex!);
+        newState = trackCraftsman(newState, actorId);
+        return resolvePendingAbility(newState, 'fountain');
+      } else {
+        // Put into hand
+        const newState = updatePlayer(state, actorId, {
+          hand: [...player.hand, flippedCard],
+        });
+        newState.phase = { ...phase }; // keep phase
+        return resolvePendingAbility(newState, 'fountain');
+      }
+    }
+
+    case 'STAIRWAY_ADD': {
+      const { phase } = state;
+      if (phase.type !== 'action') return state;
+      const isLaborer = phase.ledRole === 'Laborer';
+      const isCraftsman = phase.ledRole === 'Craftsman';
+      const isBathCraftsman = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Craftsman');
+      const isBathLaborer = phase.pendingAbilities?.some(a => a.kind === 'bath' && a.role === 'Laborer');
+      if (!isCraftsman && !isLaborer && !isBathCraftsman && !isBathLaborer) return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+      if (!hasActiveBuildingPower(player, 'stairway')) return state;
+
+      const target = state.players[action.targetPlayerId];
+      if (!target || action.targetPlayerId === actorId) return state;
+      const building = target.buildings[action.buildingIndex];
+      if (!building || !building.completed) return state;
+
+      const buildingDef = getCardDef(building.foundationCard);
+
+      // Get the material card
+      let materialCard: Card;
+      let newState: GameState = state;
+
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'scriptorium')) return state;
+        const poolIdx = state.pool.findIndex(c => canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material));
+        if (poolIdx === -1) return state;
+        materialCard = state.pool[poolIdx]!;
+        newState = { ...state, pool: [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)] };
+      } else if (action.fromStockpile) {
+        const stockIdx = player.stockpile.findIndex(c => canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material));
+        if (stockIdx === -1) return state;
+        materialCard = player.stockpile[stockIdx]!;
+        newState = updatePlayer(state, actorId, {
+          stockpile: [...player.stockpile.slice(0, stockIdx), ...player.stockpile.slice(stockIdx + 1)],
+        });
+      } else {
+        const result = removeCardFromHand(player, action.cardUid);
+        materialCard = result.card;
+        if (!canUseMaterialForBuilding(player, getCardDef(materialCard).material, buildingDef.material)) return state;
+        newState = updatePlayer(state, actorId, { hand: result.newHand });
+      }
+
+      // Add material to target's building and mark as shared
+      const newBuildings = target.buildings.map((b, i) =>
+        i === action.buildingIndex ? { ...b, materials: [...b.materials, materialCard], shared: true } : b
+      );
+      newState = updatePlayer(newState, action.targetPlayerId, { buildings: newBuildings });
+
+      if (isCraftsman) newState = trackCraftsman(newState, actorId);
+      if (isBathCraftsman || isBathLaborer) return resolvePendingAbility(newState, 'bath');
+      return advanceActor(newState, phase);
+    }
+
+    case 'SENATE_DRAW': {
+      if (!state.senateDrawsRemaining || state.senateDrawsRemaining <= 0 || state.senateDrawPlayerId === undefined) return state;
+
+      const playerId = state.senateDrawPlayerId;
+      const deferred = state.senateDeferred ?? true;
+
+      // Apply the chosen draw (draw1, jack, or generic)
+      let newState = applyThinkOption(state, playerId, action.option, deferred);
+
+      // Library: after each senate draw... no, Library triggers once per think, not per draw
+      const remaining = state.senateDrawsRemaining - 1;
+      if (remaining <= 0) {
+        // Senate draws complete — apply Library bonus and advance
+        if (hasCompletedBuilding(newState.players[playerId]!, 'library') && newState.deck.length > 0) {
+          newState = applyThinkOption(newState, playerId, { kind: 'draw1' }, deferred);
+        }
+        newState = { ...newState, senateDrawsRemaining: undefined, senateDrawPlayerId: undefined, senateDeferred: undefined };
+        return advanceAfterThink(newState, state.phase, playerId);
+      }
+
+      return { ...newState, senateDrawsRemaining: remaining };
+    }
+
     case 'SKIP_ACTION': {
       const { phase } = state;
       if (phase.type !== 'action') return state;
@@ -1324,6 +2215,28 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
           phase,
         );
       }
+
+      // Patron skip: still trigger post-Patron abilities (Bar, Stage)
+      if (phase.ledRole === 'Patron') {
+        const actorId = phase.actors[phase.currentActorIndex]!;
+        const player = state.players[actorId]!;
+        const postPatronAbilities: PendingAbility[] = [];
+
+        if (hasCompletedBuilding(player, 'stage')) {
+          postPatronAbilities.push({ kind: 'stage' });
+        }
+        if (hasCompletedBuilding(player, 'bar') && state.deck.length > 0) {
+          postPatronAbilities.push({ kind: 'bar', revealedCard: null });
+        }
+
+        if (postPatronAbilities.length > 0) {
+          return {
+            ...state,
+            phase: { ...phase, pendingAbilities: postPatronAbilities },
+          };
+        }
+      }
+
       return advanceActor(state, phase);
     }
 
@@ -1334,6 +2247,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
 // Returns the player whose turn it is to act
 export function getActivePlayerId(state: GameState): number | null {
+  // Senate: during multi-step refresh, the senate drawer is active
+  if (state.senateDrawsRemaining && state.senateDrawsRemaining > 0 && state.senateDrawPlayerId !== undefined) {
+    return state.senateDrawPlayerId;
+  }
   const { phase } = state;
   switch (phase.type) {
     case 'lead':
@@ -1351,6 +2268,39 @@ export function getActivePlayerId(state: GameState): number | null {
   }
 }
 
+/** Get the led role for the current round, if known */
+export function getLedRole(state: GameState): ActiveRole | null {
+  const { phase } = state;
+  if (phase.type === 'follow') return phase.ledRole;
+  if (phase.type === 'action') return phase.ledRole;
+  if (phase.type === 'legionary_demand') {
+    // The led role is Legionary during demand phase
+    return 'Legionary';
+  }
+  return null;
+}
+
+/** Get the expected action count for a player this round (null if not yet determinable) */
+export function getPlayerActionCount(state: GameState, playerId: number): number | null {
+  const ledRole = getLedRole(state);
+  if (!ledRole) return null;
+  const status = state.playerRoundStatus?.[playerId];
+  if (!status) return null;
+  const player = state.players[playerId]!;
+  const clientActions = getClientCountForRole(player, ledRole);
+  const cardAction = status.declaration === 'think' ? 0 : 1;
+  return cardAction + clientActions;
+}
+
+/** Get the number of pending think cards for a player */
+export function getPendingThinkCardCount(state: GameState, playerId: number): number {
+  return state.pendingThinkCards?.[playerId]?.length ?? 0;
+}
+
+export function getPendingThinkCards(state: GameState, playerId: number): Card[] {
+  return state.pendingThinkCards?.[playerId] ?? [];
+}
+
 export interface ThinkOptions {
   canRefresh: boolean;
   canDraw1: boolean;
@@ -1361,6 +2311,7 @@ export interface ThinkOptions {
 export interface AvailableActions {
   canThink: boolean;
   thinkOptions: ThinkOptions;
+  vomitoriumAvailable: boolean;
   leadOptions: { role: ActiveRole; cardUid: number; extraCardUids?: number[] }[];
   followOptions: { cardUid: number; extraCardUids?: number[] }[];
   architectOptions: { cardUid: number; outOfTown?: boolean }[];
@@ -1371,6 +2322,7 @@ export interface AvailableActions {
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number; fromPool?: boolean }[];
   merchantOptions: MaterialType[];
   bazaarOptions: MaterialType[];
+  atriumAvailable: boolean;
   vaultFull: boolean;
   patronOptions: MaterialType[];
   legionaryOptions: { cardUid: number }[];
@@ -1380,8 +2332,134 @@ export interface AvailableActions {
   encampmentOptions: { cardUid: number; outOfTown?: boolean }[];
   canJunkyard: boolean;
   hasJacksForJunkyard: boolean;
+  // On-completion and post-action pending abilities
+  canFoundry: boolean;
+  foundryHasPool: boolean;
+  foundryHasHand: boolean;
+  abilityThinkOptions: ThinkOptions;
+  remainingAbilityThinks: number | null;
+  abilityCraftsmanOptions: { buildingIndex: number; cardUid: number; fromPool?: boolean }[];
+  abilityPatronOptions: MaterialType[];
+  barCanFlip: boolean;
+  barRevealedCard: Card | null;
+  barCanClientele: boolean;
+  bathRole: ActiveRole | null;
   pendingAbilityKind: string | null;
   canSkip: boolean;
+  latrineAvailable: boolean;
+  sanctuaryOptions: { targetPlayerId: number; material: MaterialType }[];
+  prisonMaxCount: number;
+  prisonOptions: { cardUid: number }[];
+  basilicaOptions: { cardUid: number }[];
+  fountainAvailable: boolean;
+  fountainFlippedCard: Card | null;
+  fountainBuildingOptions: number[];
+  stairwayOptions: { targetPlayerId: number; buildingIndex: number; cardUid: number; fromPool?: boolean; fromStockpile?: boolean }[];
+  palaceLeadOptions: { role: ActiveRole; cardUid: number; extraCardUids: number[] }[];
+  palaceFollowOptions: { cardUid: number; extraCardUids: number[] }[];
+  senateDrawsRemaining: number;
+  senateDrawOptions: ThinkOptions;
+  circusMaximusAvailable: boolean;
+  circusMaximusCompletionMaterials: MaterialType[];
+  circusMaximusCompletionSlots: number;
+}
+
+/** Populate craftsman options for a player — reused by normal Craftsman, Quarry, Amphitheatre, Bath */
+function populateCraftsmanOptions(
+  player: Player,
+  state: GameState,
+  options: { buildingIndex: number; cardUid: number; fromPool?: boolean }[],
+) {
+  for (let bi = 0; bi < player.buildings.length; bi++) {
+    const building = player.buildings[bi]!;
+    if (building.completed) continue;
+    const buildingDef = getCardDef(building.foundationCard);
+    for (const card of player.hand) {
+      if (isJackCard(card)) continue;
+      const def = getCardDef(card);
+      if (canUseMaterialForBuilding(player, def.material, buildingDef.material)) {
+        options.push({ buildingIndex: bi, cardUid: card.uid });
+      }
+    }
+    // Scriptorium: pool cards as craftsman materials
+    if (hasCompletedBuilding(player, 'scriptorium')) {
+      if (state.pool.some(c => canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material))) {
+        options.push({ buildingIndex: bi, cardUid: 0, fromPool: true });
+      }
+    }
+  }
+}
+
+/** Populate laborer building options (stockpile/pool to building) — reused by Laborer and Bath */
+function populateLaborerBuildingOptions(
+  player: Player,
+  state: GameState,
+  options: { material: MaterialType; buildingIndex: number; fromPool?: boolean }[],
+) {
+  const stockpileMaterialSet = new Set<MaterialType>();
+  for (const card of player.stockpile) {
+    stockpileMaterialSet.add(getCardDef(card).material);
+  }
+  for (let bi = 0; bi < player.buildings.length; bi++) {
+    const building = player.buildings[bi]!;
+    if (building.completed) continue;
+    const buildingDef = getCardDef(building.foundationCard);
+    for (const mat of stockpileMaterialSet) {
+      if (canUseMaterialForBuilding(player, mat, buildingDef.material)) {
+        options.push({ material: mat, buildingIndex: bi });
+      }
+    }
+    // Scriptorium: pool cards as laborer building materials
+    if (hasCompletedBuilding(player, 'scriptorium')) {
+      if (state.pool.some(c => canUseMaterialForBuilding(player, getCardDef(c).material, buildingDef.material))) {
+        options.push({ material: buildingDef.material, buildingIndex: bi, fromPool: true });
+      }
+    }
+  }
+}
+
+/** Populate stairway options: continue another player's completed building */
+function populateStairwayOptions(
+  player: Player,
+  playerId: number,
+  state: GameState,
+  options: { targetPlayerId: number; buildingIndex: number; cardUid: number; fromPool?: boolean; fromStockpile?: boolean }[],
+  mode: 'craftsman' | 'laborer',
+) {
+  for (const p of state.players) {
+    if (p.id === playerId) continue;
+    for (let bi = 0; bi < p.buildings.length; bi++) {
+      const b = p.buildings[bi]!;
+      if (!b.completed) continue;
+      const bDef = getCardDef(b.foundationCard);
+      if (mode === 'craftsman') {
+        for (const card of player.hand) {
+          if (isJackCard(card)) continue;
+          if (canUseMaterialForBuilding(player, getCardDef(card).material, bDef.material)) {
+            options.push({ targetPlayerId: p.id, buildingIndex: bi, cardUid: card.uid });
+          }
+        }
+        if (hasCompletedBuilding(player, 'scriptorium') &&
+            state.pool.some(c => canUseMaterialForBuilding(player, getCardDef(c).material, bDef.material))) {
+          options.push({ targetPlayerId: p.id, buildingIndex: bi, cardUid: 0, fromPool: true });
+        }
+      } else {
+        // Laborer mode: use stockpile materials
+        const stockpileMats = new Set<MaterialType>();
+        for (const c of player.stockpile) stockpileMats.add(getCardDef(c).material);
+        for (const mat of stockpileMats) {
+          if (canUseMaterialForBuilding(player, mat, bDef.material)) {
+            const stockCard = player.stockpile.find(c => getCardDef(c).material === mat)!;
+            options.push({ targetPlayerId: p.id, buildingIndex: bi, cardUid: stockCard.uid, fromStockpile: true });
+          }
+        }
+        if (hasCompletedBuilding(player, 'scriptorium') &&
+            state.pool.some(c => canUseMaterialForBuilding(player, getCardDef(c).material, bDef.material))) {
+          options.push({ targetPlayerId: p.id, buildingIndex: bi, cardUid: 0, fromPool: true });
+        }
+      }
+    }
+  }
 }
 
 export function getAvailableActions(state: GameState): AvailableActions {
@@ -1389,6 +2467,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
   const result: AvailableActions = {
     canThink: false,
     thinkOptions: noThink,
+    vomitoriumAvailable: false,
     leadOptions: [],
     followOptions: [],
     architectOptions: [],
@@ -1399,6 +2478,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
     laborerBuildingOptions: [],
     merchantOptions: [],
     bazaarOptions: [],
+    atriumAvailable: false,
     vaultFull: false,
     patronOptions: [],
     legionaryOptions: [],
@@ -1408,8 +2488,35 @@ export function getAvailableActions(state: GameState): AvailableActions {
     encampmentOptions: [],
     canJunkyard: false,
     hasJacksForJunkyard: false,
+    canFoundry: false,
+    foundryHasPool: false,
+    foundryHasHand: false,
+    abilityThinkOptions: noThink,
+    remainingAbilityThinks: null,
+    abilityCraftsmanOptions: [],
+    abilityPatronOptions: [],
+    barCanFlip: false,
+    barRevealedCard: null,
+    barCanClientele: false,
+    bathRole: null,
     pendingAbilityKind: null,
     canSkip: false,
+    latrineAvailable: false,
+    sanctuaryOptions: [],
+    prisonMaxCount: 0,
+    prisonOptions: [],
+    basilicaOptions: [],
+    fountainAvailable: false,
+    fountainFlippedCard: null,
+    fountainBuildingOptions: [],
+    stairwayOptions: [],
+    palaceLeadOptions: [],
+    palaceFollowOptions: [],
+    senateDrawsRemaining: 0,
+    senateDrawOptions: noThink,
+    circusMaximusAvailable: false,
+    circusMaximusCompletionMaterials: [],
+    circusMaximusCompletionSlots: 0,
   };
 
   const activeId = getActivePlayerId(state);
@@ -1418,30 +2525,28 @@ export function getAvailableActions(state: GameState): AvailableActions {
   const player = state.players[activeId]!;
   const { phase } = state;
 
+  // Senate: multi-step refresh in progress
+  if (state.senateDrawsRemaining && state.senateDrawsRemaining > 0) {
+    result.senateDrawsRemaining = state.senateDrawsRemaining;
+    const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
+    result.senateDrawOptions = {
+      canRefresh: false,
+      canDraw1: state.deck.length > 0,
+      genericMaterials,
+      canDrawJack: state.jackPile > 0,
+    };
+    return result;
+  }
+
   // Handle pending triggered abilities
   if (phase.type === 'action' && phase.pendingAbilities && phase.pendingAbilities.length > 0) {
     const ability = phase.pendingAbilities[0]!;
-    result.canSkip = true;
+    // Bar: skippable before flip (decline to use), not skippable after flip (must choose clientele/pool)
+    result.canSkip = ability.kind !== 'bar' || ability.revealedCard === null;
     result.pendingAbilityKind = ability.kind;
 
     if (ability.kind === 'quarry') {
-      for (let bi = 0; bi < player.buildings.length; bi++) {
-        const building = player.buildings[bi]!;
-        if (building.completed) continue;
-        const buildingDef = getCardDef(building.foundationCard);
-        for (const card of player.hand) {
-          if (isJackCard(card)) continue;
-          if (getCardDef(card).material === buildingDef.material) {
-            result.quarryCraftsmanOptions.push({ buildingIndex: bi, cardUid: card.uid });
-          }
-        }
-        // Scriptorium: pool cards
-        if (hasCompletedBuilding(player, 'scriptorium')) {
-          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
-            result.quarryCraftsmanOptions.push({ buildingIndex: bi, cardUid: 0, fromPool: true });
-          }
-        }
-      }
+      populateCraftsmanOptions(player, state, result.quarryCraftsmanOptions);
     }
 
     if (ability.kind === 'encampment') {
@@ -1462,6 +2567,167 @@ export function getAvailableActions(state: GameState): AvailableActions {
       result.hasJacksForJunkyard = player.hand.some(c => isJackCard(c));
     }
 
+    if (ability.kind === 'foundry') {
+      result.canFoundry = true;
+      result.foundryHasPool = state.pool.length > 0;
+      result.foundryHasHand = player.hand.some(c => !isJackCard(c)) || player.hand.some(c => isJackCard(c));
+    }
+
+    if (ability.kind === 'school' || ability.kind === 'stage' || ability.kind === 'academy') {
+      const effectiveHandLimit = getEffectiveHandLimit(state, activeId);
+      const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
+      result.abilityThinkOptions = {
+        canRefresh: player.hand.length < effectiveHandLimit && state.deck.length > 0,
+        canDraw1: state.deck.length > 0,
+        genericMaterials,
+        canDrawJack: state.jackPile > 0,
+      };
+      if (ability.kind === 'school') {
+        result.remainingAbilityThinks = ability.remainingThinks;
+      }
+    }
+
+    if (ability.kind === 'amphitheatre') {
+      populateCraftsmanOptions(player, state, result.abilityCraftsmanOptions);
+    }
+
+    if (ability.kind === 'aqueduct') {
+      if (player.clientele.length < getClienteleCapacity(player)) {
+        const poolMaterialSet = new Set<MaterialType>();
+        for (const card of state.pool) {
+          poolMaterialSet.add(getCardDef(card).material);
+        }
+        result.abilityPatronOptions = [...poolMaterialSet];
+        if (hasCompletedBuilding(player, 'circus_maximus') &&
+            player.clientele.length + 1 < getClienteleCapacity(player)) {
+          result.circusMaximusAvailable = true;
+        }
+      }
+    }
+
+    if (ability.kind === 'bar') {
+      if (ability.revealedCard === null) {
+        result.barCanFlip = state.deck.length > 0;
+      } else {
+        result.barRevealedCard = ability.revealedCard;
+        result.barCanClientele = player.clientele.length < getClienteleCapacity(player);
+        if (hasCompletedBuilding(player, 'circus_maximus') &&
+            player.clientele.length + 1 < getClienteleCapacity(player)) {
+          result.circusMaximusAvailable = true;
+        }
+      }
+    }
+
+    if (ability.kind === 'circus_maximus_completion') {
+      const cap = getClienteleCapacity(player);
+      const remaining = cap - player.clientele.length;
+      result.circusMaximusCompletionSlots = remaining;
+      if (remaining > 0) {
+        // Show materials that have generic supply available
+        const materialCounts = new Map<MaterialType, number>();
+        for (const mat of ability.clientMaterials) {
+          materialCounts.set(mat, (materialCounts.get(mat) ?? 0) + 1);
+        }
+        const available: MaterialType[] = [];
+        for (const [mat, count] of materialCounts) {
+          const supplyAvailable = Math.min(count, state.genericSupply[mat]);
+          for (let i = 0; i < supplyAvailable; i++) available.push(mat);
+        }
+        result.circusMaximusCompletionMaterials = available;
+      }
+    }
+
+    if (ability.kind === 'bath') {
+      result.bathRole = ability.role;
+      // Populate options for the bath role
+      if (ability.role === 'Architect') {
+        for (const card of player.hand) {
+          if (isJackCard(card)) continue;
+          const def = getCardDef(card);
+          if (!canStartBuildingOfMaterial(player, def.material, state.sites, state.outOfTownSites)) continue;
+          const outOfTown = requiresOutOfTownSite(def.material, state.sites);
+          result.architectOptions.push({ cardUid: card.uid, outOfTown: outOfTown || undefined });
+        }
+      }
+      if (ability.role === 'Craftsman') {
+        populateCraftsmanOptions(player, state, result.craftsmanOptions);
+      }
+      if (ability.role === 'Laborer') {
+        const poolMaterialSet = new Set<MaterialType>();
+        for (const card of state.pool) poolMaterialSet.add(getCardDef(card).material);
+        result.laborerPoolOptions = [...poolMaterialSet];
+        if (hasCompletedBuilding(player, 'dock')) {
+          for (const card of player.hand) {
+            if (!isJackCard(card)) result.laborerHandOptions.push({ cardUid: card.uid });
+          }
+        }
+        populateLaborerBuildingOptions(player, state, result.laborerBuildingOptions);
+      }
+      if (ability.role === 'Merchant') {
+        if (player.vault.length >= player.influence) {
+          result.vaultFull = true;
+        } else {
+          const stockpileMaterialSet = new Set<MaterialType>();
+          for (const card of player.stockpile) stockpileMaterialSet.add(getCardDef(card).material);
+          result.merchantOptions = [...stockpileMaterialSet];
+          if (hasCompletedBuilding(player, 'bazaar')) {
+            const poolMaterialSet = new Set<MaterialType>();
+            for (const card of state.pool) poolMaterialSet.add(getCardDef(card).material);
+            result.bazaarOptions = [...poolMaterialSet];
+          }
+          if (hasCompletedBuilding(player, 'atrium') && state.deck.length > 0) {
+            result.atriumAvailable = true;
+          }
+        }
+      }
+      if (ability.role === 'Legionary') {
+        for (const card of player.hand) {
+          if (!isJackCard(card)) result.legionaryOptions.push({ cardUid: card.uid });
+        }
+        if (hasCompletedBuilding(player, 'bridge')) {
+          for (const card of player.hand) {
+            if (!isJackCard(card)) result.bridgeLegionaryOptions.push({ cardUid: card.uid });
+          }
+        }
+      }
+    }
+
+    if (ability.kind === 'sanctuary') {
+      for (const p of state.players) {
+        if (p.id === activeId) continue;
+        const mats = new Set<MaterialType>();
+        for (const c of p.clientele) mats.add(getCardDef(c).material);
+        for (const mat of mats) {
+          result.sanctuaryOptions.push({ targetPlayerId: p.id, material: mat });
+        }
+      }
+    }
+
+    if (ability.kind === 'prison') {
+      result.prisonMaxCount = ability.maxCount;
+      for (const c of player.clientele) {
+        result.prisonOptions.push({ cardUid: c.uid });
+      }
+    }
+
+    if (ability.kind === 'basilica') {
+      for (const c of player.hand) {
+        if (!isJackCard(c)) result.basilicaOptions.push({ cardUid: c.uid });
+      }
+    }
+
+    if (ability.kind === 'fountain') {
+      result.fountainFlippedCard = ability.flippedCard;
+      for (let bi = 0; bi < player.buildings.length; bi++) {
+        const b = player.buildings[bi]!;
+        if (b.completed) continue;
+        const bDef = getCardDef(b.foundationCard);
+        if (canUseMaterialForBuilding(player, getCardDef(ability.flippedCard).material, bDef.material)) {
+          result.fountainBuildingOptions.push(bi);
+        }
+      }
+    }
+
     return result;
   }
 
@@ -1469,12 +2735,16 @@ export function getAvailableActions(state: GameState): AvailableActions {
     result.canThink = true;
     const effectiveHandLimit = getEffectiveHandLimit(state, activeId);
     const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
+    // Latrine: may discard 1 card before thinking
+    result.latrineAvailable = hasActiveBuildingPower(player, 'latrine') && player.hand.length > 0;
+    // Senate refresh check (to show special Refresh button label)
     result.thinkOptions = {
-      canRefresh: player.hand.length < effectiveHandLimit && state.deck.length > 0,
+      canRefresh: (player.hand.length < effectiveHandLimit && state.deck.length > 0) || hasActiveBuildingPower(player, 'senate'),
       canDraw1: state.deck.length > 0,
       genericMaterials,
       canDrawJack: state.jackPile > 0,
     };
+    result.vomitoriumAvailable = hasCompletedBuilding(player, 'vomitorium') && player.hand.length > 0;
   }
 
   // Group non-jack cards by material for 3-of-a-kind detection
@@ -1532,6 +2802,34 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
       }
     }
+
+    // Circus: 2 cards of the same material can lead any role
+    if (hasCompletedBuilding(player, 'circus')) {
+      for (const cards of Object.values(materialGroups)) {
+        if (!cards || cards.length < 2) continue;
+        for (let i = 0; i < cards.length; i++) {
+          for (let j = i + 1; j < cards.length; j++) {
+            for (const role of ALL_ROLES) {
+              result.leadOptions.push({ role, cardUid: cards[i]!.uid, extraCardUids: [cards[j]!.uid] });
+            }
+          }
+        }
+      }
+    }
+
+    // Palace: lead with multiple cards of same role for extra actions
+    if (hasActiveBuildingPower(player, 'palace')) {
+      for (const [mat, cards] of Object.entries(materialGroups)) {
+        if (!cards || cards.length < 2) continue;
+        const role = MATERIAL_TO_ROLE[mat as MaterialType] as ActiveRole;
+        // Generate options for 2, 3, ... N cards
+        for (let n = 2; n <= cards.length; n++) {
+          const primary = cards[0]!;
+          const extras = cards.slice(1, n);
+          result.palaceLeadOptions.push({ role, cardUid: primary.uid, extraCardUids: extras.map(c => c.uid) });
+        }
+      }
+    }
   }
 
   if (phase.type === 'follow') {
@@ -1556,6 +2854,31 @@ export function getAvailableActions(state: GameState): AvailableActions {
         result.followOptions.push({ cardUid: card.uid, extraCardUids });
       }
     }
+
+    // Circus: 2 cards of the same material can follow any role
+    if (hasCompletedBuilding(player, 'circus')) {
+      for (const cards of Object.values(materialGroups)) {
+        if (!cards || cards.length < 2) continue;
+        for (let i = 0; i < cards.length; i++) {
+          for (let j = i + 1; j < cards.length; j++) {
+            result.followOptions.push({ cardUid: cards[i]!.uid, extraCardUids: [cards[j]!.uid] });
+          }
+        }
+      }
+    }
+
+    // Palace: follow with multiple cards of same role for extra actions
+    if (hasActiveBuildingPower(player, 'palace')) {
+      const requiredMaterial = ROLE_TO_MATERIAL[phase.ledRole];
+      const matchingCards = (materialGroups[requiredMaterial] ?? []);
+      if (matchingCards.length >= 2) {
+        for (let n = 2; n <= matchingCards.length; n++) {
+          const primary = matchingCards[0]!;
+          const extras = matchingCards.slice(1, n);
+          result.palaceFollowOptions.push({ cardUid: primary.uid, extraCardUids: extras.map(c => c.uid) });
+        }
+      }
+    }
   }
 
   if (phase.type === 'action') {
@@ -1569,8 +2892,9 @@ export function getAvailableActions(state: GameState): AvailableActions {
         const def = getCardDef(card);
         if (!canStartBuildingOfMaterial(player, def.material, state.sites, state.outOfTownSites)) continue;
         const outOfTown = requiresOutOfTownSite(def.material, state.sites);
-        // Out-of-town requires 2 remaining actions
-        if (outOfTown && remaining < 2) continue;
+        // Out-of-town requires 2 remaining actions (Tower makes it free)
+        const towerFreeOOT = hasCompletedBuilding(player, 'tower');
+        if (outOfTown && !towerFreeOOT && remaining < 2) continue;
         result.architectOptions.push({ cardUid: card.uid, outOfTown: outOfTown || undefined });
       }
 
@@ -1599,23 +2923,14 @@ export function getAvailableActions(state: GameState): AvailableActions {
     }
 
     if (phase.ledRole === 'Craftsman') {
-      for (let bi = 0; bi < player.buildings.length; bi++) {
-        const building = player.buildings[bi]!;
-        if (building.completed) continue;
-        const buildingDef = getCardDef(building.foundationCard);
-        for (const card of player.hand) {
-          if (isJackCard(card)) continue; // Jacks can't be used as materials
-          const def = getCardDef(card);
-          if (def.material === buildingDef.material) {
-            result.craftsmanOptions.push({ buildingIndex: bi, cardUid: card.uid });
-          }
-        }
-        // Scriptorium: pool cards as craftsman materials
-        if (hasCompletedBuilding(player, 'scriptorium')) {
-          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
-            result.craftsmanOptions.push({ buildingIndex: bi, cardUid: 0, fromPool: true });
-          }
-        }
+      populateCraftsmanOptions(player, state, result.craftsmanOptions);
+      // Fountain: flip from deck
+      if (hasActiveBuildingPower(player, 'fountain') && state.deck.length > 0) {
+        result.fountainAvailable = true;
+      }
+      // Stairway: continue another player's completed building
+      if (hasActiveBuildingPower(player, 'stairway')) {
+        populateStairwayOptions(player, activeId, state, result.stairwayOptions, 'craftsman');
       }
     }
 
@@ -1636,31 +2951,11 @@ export function getAvailableActions(state: GameState): AvailableActions {
         }
       }
 
-      // Stockpile to building options
-      const stockpileMaterialSet = new Set<MaterialType>();
-      for (const card of player.stockpile) {
-        stockpileMaterialSet.add(getCardDef(card).material);
-      }
-      for (let bi = 0; bi < player.buildings.length; bi++) {
-        const building = player.buildings[bi]!;
-        if (building.completed) continue;
-        const buildingDef = getCardDef(building.foundationCard);
-        if (stockpileMaterialSet.has(buildingDef.material)) {
-          result.laborerBuildingOptions.push({
-            material: buildingDef.material,
-            buildingIndex: bi,
-          });
-        }
-        // Scriptorium: pool cards as laborer building materials
-        if (hasCompletedBuilding(player, 'scriptorium')) {
-          if (state.pool.some(c => getCardDef(c).material === buildingDef.material)) {
-            result.laborerBuildingOptions.push({
-              material: buildingDef.material,
-              buildingIndex: bi,
-              fromPool: true,
-            });
-          }
-        }
+      // Stockpile/pool to building options
+      populateLaborerBuildingOptions(player, state, result.laborerBuildingOptions);
+      // Stairway: continue another player's completed building (from stockpile)
+      if (hasActiveBuildingPower(player, 'stairway')) {
+        populateStairwayOptions(player, activeId, state, result.stairwayOptions, 'laborer');
       }
     }
 
@@ -1683,17 +2978,27 @@ export function getAvailableActions(state: GameState): AvailableActions {
           }
           result.bazaarOptions = [...poolMaterialSet];
         }
+
+        // Atrium: deck to vault
+        if (hasCompletedBuilding(player, 'atrium') && state.deck.length > 0) {
+          result.atriumAvailable = true;
+        }
       }
     }
 
     if (phase.ledRole === 'Patron') {
       // Clientele capacity is limited by influence
-      if (player.clientele.length < player.influence) {
+      if (player.clientele.length < getClienteleCapacity(player)) {
         const poolMaterialSet = new Set<MaterialType>();
         for (const card of state.pool) {
           poolMaterialSet.add(getCardDef(card).material);
         }
         result.patronOptions = [...poolMaterialSet];
+        // Circus Maximus: player can opt into extra generic client
+        if (hasCompletedBuilding(player, 'circus_maximus') &&
+            player.clientele.length + 1 < getClienteleCapacity(player)) {
+          result.circusMaximusAvailable = true;
+        }
       }
     }
 
@@ -1741,6 +3046,8 @@ export interface VPBreakdown {
   influence: number;
   vault: number;
   vaultByMaterial: Partial<Record<MaterialType, VaultMaterialVP>>;
+  /** Number of face-down (Atrium) cards in vault — material hidden until game end */
+  vaultFaceDownCount: number;
   merchantBonus: number;
   merchantBonusCategories: MaterialType[];
   buildingBonus: number;
@@ -1779,15 +3086,22 @@ export function hasActiveBuildingPower(player: Player, buildingId: string): bool
 
 export function calculateVP(state: GameState, playerId: number): VPBreakdown {
   const player = state.players[playerId]!;
+  const isGameOver = state.phase.type === 'gameOver';
 
   // 1. Influence = 1 VP per influence point
   const influence = player.influence;
 
   // 2. Vault = sum of material values, and 3. Merchant bonus per category
+  // Face-down (Atrium) cards are hidden during the game; only revealed at game end
   const vaultCounts: Partial<Record<MaterialType, number>> = {};
+  let vaultFaceDownCount = 0;
   for (const card of player.vault) {
-    const mat = getCardDef(card).material;
-    vaultCounts[mat] = (vaultCounts[mat] ?? 0) + 1;
+    if (card.faceDown && !isGameOver) {
+      vaultFaceDownCount++;
+    } else {
+      const mat = getCardDef(card).material;
+      vaultCounts[mat] = (vaultCounts[mat] ?? 0) + 1;
+    }
   }
 
   let vault = 0;
@@ -1804,7 +3118,11 @@ export function calculateVP(state: GameState, playerId: number): VPBreakdown {
     let isBest = true;
     for (const other of state.players) {
       if (other.id === playerId) continue;
-      const otherCount = other.vault.filter(c => getCardDef(c).material === mat).length;
+      // For merchant bonus comparison, other players' face-down cards are also hidden
+      const otherCount = other.vault.filter(c => {
+        if (c.faceDown && !isGameOver) return false;
+        return getCardDef(c).material === mat;
+      }).length;
       if (otherCount >= myCount) {
         isBest = false;
         break;
@@ -1833,6 +3151,7 @@ export function calculateVP(state: GameState, playerId: number): VPBreakdown {
     influence,
     vault,
     vaultByMaterial,
+    vaultFaceDownCount,
     merchantBonus,
     merchantBonusCategories,
     buildingBonus,

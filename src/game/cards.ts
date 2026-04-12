@@ -65,7 +65,7 @@ export const CARD_DEFS: CardDef[] = [
   { id: 'stage', name: 'Stage', material: 'Brick', cost: 2, role: 'Legionary', power: 'After taking a Patron action, you may think.' },
   { id: 'bath', name: 'Bath', material: 'Brick', cost: 2, role: 'Legionary', power: 'After you perform a Patron action, the client you hired may perform its action once, unless it is a Patron client.' },
   { id: 'atrium', name: 'Atrium', material: 'Brick', cost: 2, role: 'Legionary', power: 'When you perform a Merchant action, you may instead put one material face down from your Deck into your Vault.' },
-  { id: 'academy', name: 'Academy', material: 'Brick', cost: 2, role: 'Legionary', power: 'After any turn in which you performed at least one Craftsman action, you may think.' },
+  { id: 'academy', name: 'Academy', material: 'Brick', cost: 2, role: 'Legionary', power: 'After any turn in which you performed at least one Craftsman action, you may think. (You must actually use the Craftsman action to place a material.)' },
   { id: 'circus_maximus', name: 'Circus Maximus', material: 'Brick', cost: 2, role: 'Legionary', power: 'You may take an additional client of the same type from the Generic Supply for each current client, as well as one additional when you gain a client in the future.' },
 
   // Concrete (cost 2, Architect)

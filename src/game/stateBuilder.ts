@@ -116,10 +116,13 @@ export function makeScenarioState(
   return { state: { ...state, deck: [] }, pool };
 }
 
-/** Compute influence from completed buildings (sum of costs) */
+/** Compute influence from completed buildings (sum of costs + Villa bonus) */
 export function computeInfluence(buildings: Building[]): number {
   return buildings.filter(b => b.completed)
-    .reduce((sum, b) => sum + getCardDef(b.foundationCard).cost, 0);
+    .reduce((sum, b) => {
+      const def = getCardDef(b.foundationCard);
+      return sum + def.cost + (def.id === 'villa' ? 3 : 0);
+    }, 0);
 }
 
 /** Compute remaining sites based on buildings in play */
@@ -219,10 +222,15 @@ export function validateScenarioState(state: GameState): void {
       if (b.completed && b.materials.length < def.cost) {
         errors.push(`${player.name}: ${def.name} completed with ${b.materials.length}/${def.cost} materials`);
       }
-      // Materials must match building's material type
+      // Materials must match building's material type (Tower: Rubble in any, Road: any in Stone)
+      const hasTower = player.buildings.some(b2 => b2.completed && getCardDef(b2.foundationCard).id === 'tower');
+      const hasRoad = player.buildings.some(b2 => b2.completed && getCardDef(b2.foundationCard).id === 'road');
       for (const m of b.materials) {
-        if (getCardDef(m).material !== def.material) {
-          errors.push(`${player.name}: ${def.name} has wrong-material card ${getCardDef(m).name} (${getCardDef(m).material} ≠ ${def.material})`);
+        const matType = getCardDef(m).material;
+        if (matType !== def.material) {
+          if (hasTower && matType === 'Rubble') continue;
+          if (hasRoad && def.material === 'Stone') continue;
+          errors.push(`${player.name}: ${def.name} has wrong-material card ${getCardDef(m).name} (${matType} ≠ ${def.material})`);
         }
       }
     }
@@ -249,6 +257,11 @@ export function validateScenarioState(state: GameState): void {
   for (const c of state.deck) count(c);
   for (const c of state.pool) count(c);
   for (const c of state.pendingPool) count(c);
+  if (state.pendingThinkCards) {
+    for (const cards of Object.values(state.pendingThinkCards)) {
+      for (const c of cards) count(c);
+    }
+  }
   for (const p of state.players) {
     for (const c of p.hand) count(c);
     for (const c of p.stockpile) count(c);

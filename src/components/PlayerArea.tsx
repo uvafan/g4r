@@ -1,29 +1,40 @@
-import { Player, MaterialType, Role, GameState } from '../game/types';
+import { Player, MaterialType, Role, GameState, ThinkOption } from '../game/types';
 import { getCardDef, MATERIAL_COLORS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL } from '../game/cards';
-import { calculateVP, getRequiredMaterials } from '../game/engine';
+import { calculateVP, getRequiredMaterials, getPlayerActionCount, getPendingThinkCards, getLedRole } from '../game/engine';
+import { isJackCard, isGenericCard } from '../game/cards';
 import { CardView } from './CardView';
+
+function formatThinkOption(opt: ThinkOption): string {
+  switch (opt.kind) {
+    case 'refresh': return 'Refresh';
+    case 'draw1': return 'Draw 1';
+    case 'generic': return `Generic ${opt.material}`;
+    case 'jack': return 'Jack';
+  }
+}
 
 interface PlayerAreaProps {
   player: Player;
   gameState: GameState;
   isActive: boolean;
+  isLeader: boolean;
   selectedBuildingIndex?: number;
   highlightedBuildingIndices?: Set<number>;
   onSelectBuilding?: (index: number) => void;
 }
 
-export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex, highlightedBuildingIndices, onSelectBuilding }: PlayerAreaProps) {
+export function PlayerArea({ player, gameState, isActive, isLeader, selectedBuildingIndex, highlightedBuildingIndices, onSelectBuilding }: PlayerAreaProps) {
   const vp = calculateVP(gameState, player.id);
 
   return (
     <div className={`player-area ${isActive ? 'player-active' : ''}`}>
       <div className="player-header">
-        <strong>{player.name}</strong>
+        <strong>{player.name}{isLeader && <span className="leader-badge">Leader</span>}</strong>
         <span className="vp-total-wrapper">
-          <span className="vp-total">{vp.total} VP</span>
+          <span className="vp-total">{vp.total} VP <span className="vp-info-icon">ⓘ</span></span>
           <div className="vp-tooltip">
             <div className="vp-tooltip-row"><span>Influence</span><span>{vp.influence}</span></div>
-            <div className="vp-tooltip-row"><span>Vault</span><span>{vp.vault}</span></div>
+            <div className="vp-tooltip-row"><span>Vault{vp.vaultFaceDownCount > 0 ? ` (+${vp.vaultFaceDownCount} hidden)` : ''}</span><span>{vp.vault}{vp.vaultFaceDownCount > 0 ? '+?' : ''}</span></div>
             {vp.merchantBonus > 0 && (
               <div className="vp-tooltip-row"><span>Merchant Bonus ({vp.merchantBonusCategories.join(', ')})</span><span>{vp.merchantBonus}</span></div>
             )}
@@ -35,6 +46,46 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
         </span>
         <span>Influence: {player.influence} | Hand: {player.hand.length}</span>
       </div>
+      {(() => {
+        const status = gameState.playerRoundStatus?.[player.id];
+        if (!status) return null;
+        const actionCount = getPlayerActionCount(gameState, player.id);
+        const pendingCards = getPendingThinkCards(gameState, player.id);
+        const ledRole = getLedRole(gameState);
+
+        let declText = '';
+        if (status.declaration === 'lead') {
+          declText = `Led ${status.role}`;
+        } else if (status.declaration === 'follow') {
+          declText = `Followed ${status.role}`;
+        } else {
+          const opt = status.thinkOption;
+          declText = opt ? `Thought (${formatThinkOption(opt)})` : 'Thought';
+        }
+
+        const parts: string[] = [declText];
+        if (actionCount !== null) {
+          if (actionCount > 0) {
+            parts.push(`${actionCount} ${ledRole} action${actionCount !== 1 ? 's' : ''}`);
+          } else {
+            parts.push('no actions');
+          }
+        }
+        if (pendingCards.length > 0) {
+          const descriptions = pendingCards.map(c => {
+            if (isJackCard(c)) return 'Jack';
+            if (isGenericCard(c)) return `Generic ${getCardDef(c).material}`;
+            return 'card';
+          });
+          parts.push(`+${descriptions.join(', +')} at round end`);
+        }
+
+        return (
+          <div className="round-status">
+            {parts.join(' \u2014 ')}
+          </div>
+        );
+      })()}
       {(player.vault.length > 0 || player.influence > 0) && (
         <div className="stockpile-row">
           <span className="stockpile-label">Vault ({player.vault.length}/{player.influence}):</span>
@@ -46,6 +97,12 @@ export function PlayerArea({ player, gameState, isActive, selectedBuildingIndex,
               </span>
             </div>
           ))}
+          {vp.vaultFaceDownCount > 0 && (
+            <div className="vault-chip" style={{ backgroundColor: '#666' }}>
+              <span>{vp.vaultFaceDownCount} ???</span>
+              <span className="vault-vp">?vp</span>
+            </div>
+          )}
         </div>
       )}
       {(player.clientele.length > 0 || player.influence > 0) && (

@@ -38,7 +38,7 @@ export function PhaseIndicator({ state }: PhaseIndicatorProps) {
   return (
     <div className="phase-indicator">
       <strong>{phaseText}</strong>
-      <span className="deck-count">Deck: {state.deck.length} | Pool: {state.pool.length}</span>
+      <span className="deck-count">Deck: {state.deck.length} | Pool: {state.pool.length}{state.pendingPool.length > 0 ? ` (+${state.pendingPool.length} pending)` : ''}</span>
     </div>
   );
 }

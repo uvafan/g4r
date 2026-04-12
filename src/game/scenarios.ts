@@ -738,6 +738,376 @@ export function scriptoriumPower(): Scenario {
   };
 }
 
+/** Shrine power — +2 Refresh Hand Size */
+export function shrinePower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const building = mkBuilding(pool.card('shrine'), [pool.material('Brick'), pool.material('Brick')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Brick'), pool.material('Concrete')];
+  return {
+    name: 'Shrine power (+2 hand size)',
+    description: 'Player 0 has completed Shrine — refresh draws to 7 instead of 5',
+    state: buildScenario(state, pool, [{ buildings: [building], hand }, {}]),
+  };
+}
+
+/** Road power — any material builds Stone buildings */
+export function roadPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const roadBuilding = mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  const stoneBuilding = mkBuilding(pool.card('villa'), [], false);
+  const rubbleCard = pool.material('Rubble');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [rubbleCard, pool.material('Wood'), pool.material('Brick'), pool.material('Concrete'), pool.material('Marble')];
+  return {
+    name: 'Road power (any material for Stone)',
+    description: 'Player 0 has Road — can use any material to build Stone buildings (Villa)',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [roadBuilding, stoneBuilding], hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Tower power — Rubble in any structure + free OOT */
+export function towerPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const towerBuilding = mkBuilding(pool.card('tower'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  const brickBuilding = mkBuilding(pool.card('foundry'), [], false);
+  const rubbleCard = pool.material('Rubble');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [rubbleCard, pool.material('Brick'), pool.material('Concrete'), pool.material('Wood'), pool.material('Stone')];
+  return {
+    name: 'Tower power (Rubble in any + free OOT)',
+    description: 'Player 0 has Tower — Rubble works in any building, OOT sites cost 1 action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [towerBuilding, brickBuilding], hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Tower free OOT — normal sites depleted, Tower lets you start OOT for 1 action */
+export function towerFreeOOT(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const towerBuilding = mkBuilding(pool.card('tower'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Brick'), pool.material('Brick'), pool.material('Wood'), pool.material('Stone'), pool.material('Rubble')];
+  let result = buildScenario(state, pool, [
+    { buildings: [towerBuilding], hand }, {},
+  ]);
+  // Deplete normal Brick sites so Architect must use OOT
+  result = { ...result, sites: { ...result.sites, Brick: 0, Concrete: result.sites.Concrete - 1 } };
+  return {
+    name: 'Tower free OOT start',
+    description: 'Player 0 has Tower, normal Brick sites depleted — start OOT building for 1 action',
+    state: withActionPhase(result, 'Architect', [0, 0]),
+  };
+}
+
+/** Foundry power — on completion: pool/hand to stockpile */
+export function foundryPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const foundryBuilding = mkBuilding(pool.card('foundry'), [pool.material('Brick')], false);
+  const brickCard = pool.material('Brick');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [brickCard, pool.material('Wood'), pool.material('Concrete'), pool.material('Stone'), pool.material('Marble')];
+  const gamePool = [pool.material('Rubble'), pool.material('Wood'), pool.material('Stone')];
+  return {
+    name: 'Foundry power (complete it)',
+    description: 'Player 0 has Foundry nearly complete — finish it to take pool/hand into stockpile',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [foundryBuilding], hand }, {},
+    ], gamePool), 'Craftsman'),
+  };
+}
+
+/** Atrium power — Merchant: deck to vault */
+export function atriumPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const atriumBuilding = mkBuilding(pool.card('atrium'), [pool.material('Brick'), pool.material('Brick')], true);
+  const stockpile = [pool.material('Stone'), pool.material('Brick')];
+  return {
+    name: 'Atrium power (Merchant)',
+    description: 'Player 0 has Atrium — can take top of deck into vault as Merchant action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [atriumBuilding], stockpile }, {},
+    ]), 'Merchant'),
+  };
+}
+
+/** School power — on completion, Think once per influence */
+export function schoolPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const barracks = mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true);
+  const schoolBuilding = mkBuilding(pool.card('school'), [pool.material('Brick')], false);
+  const brickCard = pool.material('Brick');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [brickCard, pool.material('Wood'), pool.material('Concrete'), pool.material('Stone'), pool.material('Marble')];
+  return {
+    name: 'School power (complete it)',
+    description: 'Player 0 has School nearly complete — finish it to Think per influence',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [barracks, schoolBuilding], hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Stage power — after Patron action, may Think */
+export function stagePower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const stageBuilding = mkBuilding(pool.card('stage'), [pool.material('Brick'), pool.material('Brick')], true);
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Stone')];
+  return {
+    name: 'Stage power (Patron)',
+    description: 'Player 0 has Stage — Think after each Patron action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [stageBuilding] }, {},
+    ], gamePool), 'Patron'),
+  };
+}
+
+/** Bath power — after Patron action, hired client acts */
+export function bathPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const bathBuilding = mkBuilding(pool.card('bath'), [pool.material('Brick'), pool.material('Brick')], true);
+  const woodBuilding = mkBuilding(pool.card('crane'), [], false);
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Stone')];
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Wood'), pool.material('Brick'), pool.material('Concrete'), pool.material('Stone'), pool.material('Marble')];
+  return {
+    name: 'Bath power (Patron)',
+    description: 'Player 0 has Bath + incomplete Crane — hire Wood to get a Craftsman action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [bathBuilding, woodBuilding], hand }, {},
+    ], gamePool), 'Patron'),
+  };
+}
+
+/** Bar power — after Patron action, reveal top of deck */
+export function barPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const barBuilding = mkBuilding(pool.card('bar'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  const gamePool = [pool.material('Wood'), pool.material('Brick'), pool.material('Stone')];
+  return {
+    name: 'Bar power (Patron)',
+    description: 'Player 0 has Bar — reveal top of deck after each Patron action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [barBuilding] }, {},
+    ], gamePool), 'Patron'),
+  };
+}
+
+/** Academy power — Think after Craftsman turn */
+export function academyPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const academyBuilding = mkBuilding(pool.card('academy'), [pool.material('Brick'), pool.material('Brick')], true);
+  const woodBuilding = mkBuilding(pool.card('crane'), [], false);
+  const woodCard = pool.material('Wood');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [woodCard, pool.material('Brick'), pool.material('Concrete'), pool.material('Stone'), pool.material('Marble')];
+  return {
+    name: 'Academy power (Craftsman)',
+    description: 'Player 0 has Academy + incomplete Crane — Think after performing Craftsman action',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [academyBuilding, woodBuilding], hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Circus Maximus power — extra client from Generic Supply */
+export function circusMaximusPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const cmBuilding = mkBuilding(pool.card('circus_maximus'), [pool.material('Brick'), pool.material('Brick')], true);
+  const barracks = mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true);
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Stone'), pool.material('Brick')];
+  return {
+    name: 'Circus Maximus power (Patron)',
+    description: 'Player 0 has Circus Maximus — gains extra generic client on each Patron hire',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [cmBuilding, barracks] }, {},
+    ], gamePool), 'Patron'),
+  };
+}
+
+/** Circus Maximus upon completion — choose which clients to duplicate (tight capacity, duplicate types) */
+export function circusMaximusCompletion(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  // CM needs 2 Brick materials, give it 1 so player can complete it
+  const cmBuilding = mkBuilding(pool.card('circus_maximus'), [pool.material('Brick')], false);
+  // Cost-3 building — pre-completion influence = 3 (holds 3 clients), post-completion = 3 + 2 (CM) = 5, capacity = 5, remaining = 2
+  const villa = mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true);
+  const brickCard = pool.material('Brick');
+  // 2 Wood + 1 Concrete clients — capacity 3 means only 1 slot to duplicate (tests tight capacity + duplicate types)
+  const clients = [pool.material('Wood'), pool.material('Wood'), pool.material('Concrete')];
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [brickCard, pool.material('Wood'), pool.material('Concrete'), pool.material('Stone')];
+  return {
+    name: 'Circus Maximus completion (tight capacity + dupes)',
+    description: 'Player 0 has CM nearly complete + 3 clients (2 Wood, 1 Concrete) — capacity will be 5 so 2 duplicate slots',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [cmBuilding, villa], clientele: clients, hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Vomitorium power — discard hand before Think */
+export function vomitoriumPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const vomBuilding = mkBuilding(pool.card('vomitorium'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  return {
+    name: 'Vomitorium power (Think)',
+    description: 'Player 0 has Vomitorium — can discard hand to pool before Thinking',
+    state: buildScenario(state, pool, [{ buildings: [vomBuilding] }, {}]),
+  };
+}
+
+/** Circus power — 2 same-color cards lead/follow any role */
+export function circusPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const circusBuilding = mkBuilding(pool.card('circus'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  const wood1 = pool.material('Wood');
+  const wood2 = pool.material('Wood');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [wood1, wood2, pool.material('Brick'), pool.material('Stone'), pool.material('Marble')];
+  return {
+    name: 'Circus power (Lead/Follow)',
+    description: 'Player 0 has Circus + 2 Wood — can lead/follow any role with 2 same-color cards',
+    state: buildScenario(state, pool, [{ buildings: [circusBuilding], hand }, {}]),
+  };
+}
+
+/** Amphitheatre power — on completion, Craftsman per influence */
+export function amphitheatrePower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const barracks = mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true);
+  const amphBuilding = mkBuilding(pool.card('amphitheatre'), [pool.material('Concrete')], false);
+  const concreteCard = pool.material('Concrete');
+  const woodBuilding = mkBuilding(pool.card('crane'), [], false);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [concreteCard, pool.material('Wood'), pool.material('Brick'), pool.material('Stone'), pool.material('Marble')];
+  return {
+    name: 'Amphitheatre power (complete it)',
+    description: 'Player 0 has Amphitheatre nearly complete + incomplete Crane — finish it for Craftsman actions',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [barracks, amphBuilding, woodBuilding], hand }, {},
+    ]), 'Craftsman'),
+  };
+}
+
+/** Aqueduct power — on completion, Patron per influence */
+export function aqueductPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const barracks = mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true);
+  const aqBuilding = mkBuilding(pool.card('aqueduct'), [pool.material('Concrete')], false);
+  const concreteCard = pool.material('Concrete');
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [concreteCard, pool.material('Wood'), pool.material('Brick'), pool.material('Stone'), pool.material('Marble')];
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Stone')];
+  return {
+    name: 'Aqueduct power (complete it)',
+    description: 'Player 0 has Aqueduct nearly complete — finish it for Patron actions per influence',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [barracks, aqBuilding], hand }, {},
+    ], gamePool), 'Craftsman'),
+  };
+}
+
+/** Stage + Bar + Bath Patron combo */
+export function patronCombo(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const stageBuilding = mkBuilding(pool.card('stage'), [pool.material('Brick'), pool.material('Brick')], true);
+  const barBuilding = mkBuilding(pool.card('bar'), [pool.material('Concrete'), pool.material('Concrete')], true);
+  const bathBuilding = mkBuilding(pool.card('bath'), [pool.material('Brick'), pool.material('Brick')], true);
+  const gamePool = [pool.material('Wood'), pool.material('Concrete'), pool.material('Stone'), pool.material('Brick')];
+  return {
+    name: 'Stage + Bar + Bath (Patron combo)',
+    description: 'Player 0 has Stage, Bar, Bath — post-Patron triggers chain',
+    state: withActionPhase(buildScenario(state, pool, [
+      { buildings: [stageBuilding, barBuilding, bathBuilding] }, {},
+    ], gamePool), 'Patron'),
+  };
+}
+
+/** Lead phase — Player 0 has clients, demonstrating deferred think + action counts */
+export function deferredThink(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  // Alice: 2 Concrete clients (Architect) — needs influence >= 2
+  const aliceClients = [pool.material('Concrete'), pool.material('Concrete')];
+  const aliceBuildings = [
+    mkBuilding(pool.card('road'), [pool.material('Concrete'), pool.material('Concrete')], true), // cost 2
+  ];
+  // Bob: 1 Concrete client — needs influence >= 1
+  const bobClient = [pool.material('Concrete')];
+  const bobBuildings = [
+    mkBuilding(pool.card('barracks'), [pool.material('Rubble')], true), // cost 1
+  ];
+
+  // Make sure Alice has a Concrete card to lead with
+  pool.returnCards(state.players[0]!.hand);
+  const aliceHand = [pool.material('Concrete'), pool.material('Wood'), pool.material('Brick'), pool.material('Stone'), pool.material('Rubble')];
+  const gamePool = [pool.material('Wood'), pool.material('Stone')];
+
+  const result = buildScenario(state, pool, [
+    { buildings: aliceBuildings, clientele: aliceClients, hand: aliceHand },
+    { buildings: bobBuildings, clientele: bobClient },
+  ], gamePool);
+
+  return {
+    name: 'Deferred think + clients',
+    description: 'Alice has 2 Architect clients — lead Architect or think to see round status',
+    state: result,
+  };
+}
+
+/** Villa completed — 6 influence */
+export function villaPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const villa = mkBuilding(pool.card('villa'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true);
+  const result = buildScenario(state, pool, [{ buildings: [villa] }, {}]);
+  return { name: 'Villa power', description: 'Alice has Villa (6 influence)', state: result };
+}
+
+/** Library + think phase */
+export function libraryPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const library = mkBuilding(pool.card('library'), [pool.material('Stone'), pool.material('Stone'), pool.material('Stone')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Wood'), pool.material('Brick')];
+  const result = buildScenario(state, pool, [{ buildings: [library], hand }, {}]);
+  return { name: 'Library power', description: 'Alice has Library — think to draw extra', state: result };
+}
+
+/** Palace in lead phase */
+export function palacePower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const palace = mkBuilding(pool.card('palace'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Stone'), pool.material('Stone'), pool.material('Stone'), pool.material('Brick'), pool.material('Rubble')];
+  const result = buildScenario(state, pool, [{ buildings: [palace], hand }, {}]);
+  return { name: 'Palace power', description: 'Alice has Palace — lead with multiple cards for extra actions', state: result };
+}
+
+/** Basilica + merchant action */
+export function basilicaPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const basilica = mkBuilding(pool.card('basilica'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Wood'), pool.material('Brick')];
+  const stockpile = [pool.material('Stone'), pool.material('Concrete')];
+  const result = buildScenario(state, pool, [{ buildings: [basilica], hand, stockpile }, {}]);
+  return { name: 'Basilica power', description: 'Alice has Basilica — merchant + vault from hand', state: withActionPhase(result, 'Merchant') };
+}
+
+/** Fountain in craftsman phase */
+export function fountainPower(): Scenario {
+  const { state, pool } = makeScenarioState(2, ['Alice', 'Bob'], 42);
+  const fountain = mkBuilding(pool.card('fountain'), [pool.material('Marble'), pool.material('Marble'), pool.material('Marble')], true);
+  const brickBuilding = mkBuilding(pool.card('foundry'), [pool.material('Brick')], false);
+  pool.returnCards(state.players[0]!.hand);
+  const hand = [pool.material('Rubble'), pool.material('Wood')];
+  const result = buildScenario(state, pool, [{ buildings: [fountain, brickBuilding], hand }, {}]);
+  return { name: 'Fountain power', description: 'Alice has Fountain + open Brick building — flip from deck', state: withActionPhase(result, 'Craftsman') };
+}
+
 export const SCENARIOS: Scenario[] = [
   freshGame(),
   architectAction(),
@@ -771,4 +1141,28 @@ export const SCENARIOS: Scenario[] = [
   quarryPower(),
   encampmentPower(),
   scriptoriumPower(),
+  shrinePower(),
+  roadPower(),
+  towerPower(),
+  towerFreeOOT(),
+  foundryPower(),
+  atriumPower(),
+  schoolPower(),
+  stagePower(),
+  bathPower(),
+  barPower(),
+  academyPower(),
+  circusMaximusPower(),
+  circusMaximusCompletion(),
+  vomitoriumPower(),
+  circusPower(),
+  amphitheatrePower(),
+  aqueductPower(),
+  patronCombo(),
+  deferredThink(),
+  villaPower(),
+  libraryPower(),
+  palacePower(),
+  basilicaPower(),
+  fountainPower(),
 ];

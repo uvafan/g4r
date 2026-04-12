@@ -166,13 +166,34 @@ body {
   border-color: #e94560;
 }
 
+.leader-badge {
+  margin-left: 6px;
+  font-size: 0.7em;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e9a645;
+  color: #1a1a2e;
+  vertical-align: middle;
+}
+
 .player-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   font-size: 14px;
+}
+
+.round-status {
+  font-size: 12px;
+  color: #b0b8c0;
+  padding: 2px 6px;
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  border-left: 3px solid #5a8;
 }
 
 .vp-total-wrapper {
@@ -184,6 +205,13 @@ body {
   font-weight: bold;
   color: #ffd700;
   cursor: help;
+}
+
+.vp-info-icon {
+  font-size: 0.75em;
+  opacity: 0.6;
+  margin-left: 2px;
+  vertical-align: middle;
 }
 
 .vp-tooltip {
