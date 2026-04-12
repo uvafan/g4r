@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP } from './engine';
+import { createInitialState, gameReducer, getActivePlayerId, getAvailableActions, getNeighborIds, getClientCountForRole, calculateVP, getEffectiveHandLimit, hasActiveBuildingPower } from './engine';
 import { getCardDef, CARD_DEFS, MATERIAL_TO_ROLE, ROLE_TO_MATERIAL, isGenericCard, genericDefIdForMaterial, isJackCard } from './cards';
 import { GameState, Card, Building } from './types';
-import { seededRng, makeState, Uids, mkBuilding, updatePlayer, finalize, withActionPhase } from './stateBuilder';
+import { seededRng, makeState, mkBuilding, updatePlayer, finalize, withActionPhase } from './stateBuilder';
 import { architectAction, legionaryAction, clienteleProduction } from './scenarios';
 
 describe('createInitialState', () => {
@@ -3064,5 +3064,594 @@ describe('Game end - building diversity', () => {
     const r2 = gameReducer(r1, { type: 'THINK', option: { kind: 'jack' } });
     expect(r2.phase.type).toBe('lead');
     expect(r2.gameEndTriggered).toBeFalsy();
+  });
+});
+
+// ===== Wood Building Powers =====
+
+describe('Cross power (+1 Refresh Hand Size)', () => {
+  it('getEffectiveHandLimit returns base limit without Cross', () => {
+    const { state } = makeState(2, ['A', 'B'], 42);
+    expect(getEffectiveHandLimit(state, 0)).toBe(5);
+  });
+
+  it('getEffectiveHandLimit returns +1 with completed Cross', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [crossBuilding], influence: 1 });
+    expect(getEffectiveHandLimit(s, 0)).toBe(6);
+    // Player 1 without Cross still has 5
+    expect(getEffectiveHandLimit(s, 1)).toBe(5);
+  });
+
+  it('refresh draws up to 6 with Cross', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
+    let s = finalize(state, uids);
+    // Give player 0 Cross and only 2 cards
+    s = updatePlayer(s, 0, {
+      buildings: [crossBuilding],
+      influence: 1,
+      hand: s.players[0]!.hand.slice(0, 2),
+    });
+    s = { ...s, phase: { type: 'lead', leaderId: 0 } };
+    const result = gameReducer(s, { type: 'THINK', option: { kind: 'refresh' } });
+    // Should draw 4 cards to reach hand limit of 6
+    expect(result.players[0]!.hand).toHaveLength(6);
+  });
+
+  it('incomplete Cross does not increase hand limit', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const crossBuilding = mkBuilding(uids.card('cross'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [crossBuilding] });
+    expect(getEffectiveHandLimit(s, 0)).toBe(5);
+  });
+});
+
+describe('Market power (on-completion: generic supply to hand)', () => {
+  it('completing Market adds 1 of each material from generic supply to hand', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    // Market needs 1 material (Wood cost 1). Give player a Market foundation + Wood card to add
+    const woodCard = uids.card('crane'); // any Wood card
+    const marketBuilding = mkBuilding(uids.card('market'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [marketBuilding],
+      hand: [woodCard, ...s.players[0]!.hand.slice(0, 4)],
+      influence: 0,
+    });
+    s = withActionPhase(s, 'Craftsman');
+
+    const handSizeBefore = s.players[0]!.hand.length;
+    const result = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: woodCard.uid });
+    const player = result.players[0]!;
+    // Building should be complete
+    expect(player.buildings[0]!.completed).toBe(true);
+    // Hand should gain 6 generic cards (1 of each type), minus 1 used for crafting
+    expect(player.hand).toHaveLength(handSizeBefore - 1 + 6);
+    const handMaterials = player.hand.map(c => getCardDef(c).material);
+    expect(handMaterials).toContain('Rubble');
+    expect(handMaterials).toContain('Wood');
+    expect(handMaterials).toContain('Brick');
+    expect(handMaterials).toContain('Concrete');
+    expect(handMaterials).toContain('Stone');
+    expect(handMaterials).toContain('Marble');
+    // Stockpile should be empty (materials go to hand, not stockpile)
+    expect(player.stockpile).toHaveLength(0);
+    // Generic supply should be decremented
+    expect(result.genericSupply.Rubble).toBe(8);
+    expect(result.genericSupply.Wood).toBe(8);
+    // Influence should increase by 1 (cost of Wood building)
+    expect(player.influence).toBe(1);
+  });
+
+  it('Market does not take from empty generic supply slots', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const woodCard = uids.card('crane');
+    const marketBuilding = mkBuilding(uids.card('market'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [marketBuilding],
+      hand: [woodCard, ...s.players[0]!.hand.slice(0, 4)],
+      influence: 0,
+    });
+    // Deplete Stone from generic supply
+    s = { ...s, genericSupply: { ...s.genericSupply, Stone: 0 } };
+    s = withActionPhase(s, 'Craftsman');
+
+    const handSizeBefore = s.players[0]!.hand.length;
+    const result = gameReducer(s, { type: 'CRAFTSMAN_ADD', buildingIndex: 0, cardUid: woodCard.uid });
+    // Should only get 5 cards (no Stone) added to hand
+    expect(result.players[0]!.hand).toHaveLength(handSizeBefore - 1 + 5);
+    const handMaterials = result.players[0]!.hand.map(c => getCardDef(c).material);
+    expect(handMaterials).not.toContain('Stone');
+  });
+});
+
+describe('Dock power (Laborer: hand to stockpile)', () => {
+  it('shows dock options when player has completed Dock during Laborer action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const dockBuilding = mkBuilding(uids.card('dock'), [uids.card('crane')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [dockBuilding], influence: 1 });
+    s = withActionPhase(s, 'Laborer');
+
+    const actions = getAvailableActions(s);
+    expect(actions.laborerHandOptions.length).toBeGreaterThan(0);
+    // Should not include Jacks
+    for (const opt of actions.laborerHandOptions) {
+      const card = s.players[0]!.hand.find(c => c.uid === opt.cardUid)!;
+      expect(isJackCard(card)).toBe(false);
+    }
+  });
+
+  it('does not show dock options without completed Dock', () => {
+    const { state } = makeState(2, ['A', 'B'], 42);
+    const s = withActionPhase(state, 'Laborer');
+    const actions = getAvailableActions(s);
+    expect(actions.laborerHandOptions).toHaveLength(0);
+  });
+
+  it('LABORER_HAND_TO_STOCKPILE moves card from hand to stockpile', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const dockBuilding = mkBuilding(uids.card('dock'), [uids.card('crane')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [dockBuilding], influence: 1 });
+    s = withActionPhase(s, 'Laborer');
+
+    const cardToMove = s.players[0]!.hand[0]!;
+    const initialHandSize = s.players[0]!.hand.length;
+    const result = gameReducer(s, { type: 'LABORER_HAND_TO_STOCKPILE', cardUid: cardToMove.uid });
+
+    expect(result.players[0]!.hand).toHaveLength(initialHandSize - 1);
+    expect(result.players[0]!.hand.find(c => c.uid === cardToMove.uid)).toBeUndefined();
+    expect(result.players[0]!.stockpile).toContainEqual(cardToMove);
+  });
+
+  it('LABORER_HAND_TO_STOCKPILE rejects Jacks', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const dockBuilding = mkBuilding(uids.card('dock'), [uids.card('crane')], true);
+    const jack: Card = { uid: uids.next(), defId: 'jack' };
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [dockBuilding],
+      hand: [jack, ...s.players[0]!.hand],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Laborer');
+
+    const result = gameReducer(s, { type: 'LABORER_HAND_TO_STOCKPILE', cardUid: jack.uid });
+    // Should be unchanged (rejected)
+    expect(result.players[0]!.hand).toContainEqual(jack);
+    expect(result.players[0]!.stockpile).not.toContainEqual(jack);
+  });
+
+  it('LABORER_HAND_TO_STOCKPILE rejected without Dock', () => {
+    const { state } = makeState(2, ['A', 'B'], 42);
+    const s = withActionPhase(state, 'Laborer');
+    const card = s.players[0]!.hand[0]!;
+    const result = gameReducer(s, { type: 'LABORER_HAND_TO_STOCKPILE', cardUid: card.uid });
+    // Should be unchanged
+    expect(result.players[0]!.hand).toContainEqual(card);
+  });
+});
+
+describe('Bazaar power (Merchant: pool to vault)', () => {
+  it('shows bazaar options when player has completed Bazaar during Merchant action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [bazaarBuilding], influence: 1 });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const actions = getAvailableActions(s);
+    expect(actions.bazaarOptions).toContain('Stone');
+  });
+
+  it('does not show bazaar options without completed Bazaar', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { influence: 3 });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const actions = getAvailableActions(s);
+    expect(actions.bazaarOptions).toHaveLength(0);
+  });
+
+  it('does not show bazaar options when vault is full', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [bazaarBuilding],
+      influence: 1,
+      vault: [uids.material('Rubble')], // 1 vault item = influence, so full
+    });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const actions = getAvailableActions(s);
+    expect(actions.bazaarOptions).toHaveLength(0);
+    expect(actions.vaultFull).toBe(true);
+  });
+
+  it('MERCHANT_STOCKPILE_TO_VAULT with fromPool moves pool card to vault', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [bazaarBuilding], influence: 1 });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const result = gameReducer(s, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Stone', fromPool: true });
+    expect(result.players[0]!.vault).toHaveLength(1);
+    expect(getCardDef(result.players[0]!.vault[0]!).material).toBe('Stone');
+    expect(result.pool).toHaveLength(0);
+  });
+
+  it('MERCHANT_STOCKPILE_TO_VAULT with fromPool rejected without Bazaar', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { influence: 3 });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const result = gameReducer(s, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Stone', fromPool: true });
+    // Should be unchanged
+    expect(result.pool).toHaveLength(1);
+    expect(result.players[0]!.vault).toHaveLength(0);
+  });
+
+  it('MERCHANT_STOCKPILE_TO_VAULT with fromPool respects vault capacity', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+    const poolCard = uids.material('Stone');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [bazaarBuilding],
+      influence: 1,
+      vault: [uids.material('Rubble')], // vault full
+    });
+    s = { ...s, pool: [poolCard] };
+    s = withActionPhase(s, 'Merchant');
+
+    const result = gameReducer(s, { type: 'MERCHANT_STOCKPILE_TO_VAULT', material: 'Stone', fromPool: true });
+    // Should be unchanged — vault is full
+    expect(result.pool).toHaveLength(1);
+    expect(result.players[0]!.vault).toHaveLength(1);
+  });
+});
+
+describe('Crane power (Architect: start 2 buildings)', () => {
+  it('shows crane options when player has completed Crane during Architect action', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [craneBuilding],
+      hand: [brickCard, stoneCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Architect');
+
+    const actions = getAvailableActions(s);
+    expect(actions.architectCraneOptions.length).toBeGreaterThan(0);
+    // Should have pairs with both orderings
+    const hasPair = actions.architectCraneOptions.some(o =>
+      (o.cardUid === brickCard.uid && o.craneCardUid === stoneCard.uid) ||
+      (o.cardUid === stoneCard.uid && o.craneCardUid === brickCard.uid)
+    );
+    expect(hasPair).toBe(true);
+  });
+
+  it('does not show crane options without completed Crane', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { hand: [brickCard, stoneCard], influence: 3 });
+    s = withActionPhase(s, 'Architect');
+
+    const actions = getAvailableActions(s);
+    expect(actions.architectCraneOptions).toHaveLength(0);
+  });
+
+  it('ARCHITECT_START with craneCardUid starts 2 buildings', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [craneBuilding],
+      hand: [brickCard, stoneCard],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Architect');
+
+    const result = gameReducer(s, {
+      type: 'ARCHITECT_START',
+      cardUid: brickCard.uid,
+      craneCardUid: stoneCard.uid,
+    });
+
+    const player = result.players[0]!;
+    // Should have 3 buildings total (1 existing Crane + 2 new)
+    expect(player.buildings).toHaveLength(3);
+    expect(player.hand).toHaveLength(0);
+    // Both new buildings should exist
+    expect(player.buildings[1]!.foundationCard.uid).toBe(brickCard.uid);
+    expect(player.buildings[2]!.foundationCard.uid).toBe(stoneCard.uid);
+    // Sites should be decremented for both
+    expect(result.sites.Brick).toBe(s.sites.Brick - 1);
+    expect(result.sites.Stone).toBe(s.sites.Stone - 1);
+  });
+
+  it('ARCHITECT_START with craneCardUid rejected without completed Crane', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { hand: [brickCard, stoneCard], influence: 3 });
+    s = withActionPhase(s, 'Architect');
+
+    const result = gameReducer(s, {
+      type: 'ARCHITECT_START',
+      cardUid: brickCard.uid,
+      craneCardUid: stoneCard.uid,
+    });
+    // Should be unchanged
+    expect(result.players[0]!.buildings).toHaveLength(0);
+  });
+
+  it('crane does not allow 2 buildings of same material', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+    const brick1 = uids.card('foundry');
+    const brick2 = uids.card('school');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [craneBuilding],
+      hand: [brick1, brick2],
+      influence: 1,
+    });
+    s = withActionPhase(s, 'Architect');
+
+    const actions = getAvailableActions(s);
+    // Should not have crane option for 2 bricks (can't have 2 uncompleted of same material)
+    const sameMaterialPair = actions.architectCraneOptions.some(o =>
+      (o.cardUid === brick1.uid && o.craneCardUid === brick2.uid) ||
+      (o.cardUid === brick2.uid && o.craneCardUid === brick1.uid)
+    );
+    expect(sameMaterialPair).toBe(false);
+  });
+
+  it('crane does not allow out-of-town buildings', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [craneBuilding],
+      hand: [brickCard, stoneCard],
+      influence: 1,
+    });
+    // Deplete normal Brick sites so it would require out-of-town
+    s = { ...s, sites: { ...s.sites, Brick: 0 } };
+    s = withActionPhase(s, 'Architect');
+
+    const actions = getAvailableActions(s);
+    // Brick is out-of-town only, so no crane pairs should include it
+    const hasBrickPair = actions.architectCraneOptions.some(o =>
+      o.cardUid === brickCard.uid || o.craneCardUid === brickCard.uid
+    );
+    expect(hasBrickPair).toBe(false);
+  });
+
+  it('crane reducer rejects out-of-town first building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+    const brickCard = uids.card('foundry');
+    const stoneCard = uids.card('villa');
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, {
+      buildings: [craneBuilding],
+      hand: [brickCard, stoneCard],
+      influence: 1,
+    });
+    // Deplete normal Brick sites
+    s = { ...s, sites: { ...s.sites, Brick: 0 } };
+    s = withActionPhase(s, 'Architect', [0, 0]); // 2 actions for OOT
+
+    const result = gameReducer(s, {
+      type: 'ARCHITECT_START',
+      cardUid: brickCard.uid,
+      craneCardUid: stoneCard.uid,
+    });
+    // Should be rejected — out-of-town + crane not allowed
+    expect(result.players[0]!.buildings).toHaveLength(1); // only Crane
+  });
+});
+
+describe('Palisade power (block odd legionary demands)', () => {
+  function setupLegionaryWithPalisade(opts: { palisade?: boolean; wall?: boolean; actorActions?: number }) {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const buildings: Building[] = [];
+    if (opts.palisade) buildings.push(mkBuilding(uids.card('palisade'), [uids.card('market')], true));
+    if (opts.wall) buildings.push(mkBuilding(uids.card('wall'), [uids.card('road'), uids.card('tower')], true));
+
+    // Give player 0 (attacker) multiple legionary reveal cards
+    const revealCards = [
+      uids.material('Wood'), uids.material('Wood'), uids.material('Wood'),
+      uids.material('Wood'), uids.material('Wood'),
+    ];
+    // Give player 1 (defender with Palisade) matching Wood cards to give
+    const defenderWoodCards = [
+      uids.material('Wood'), uids.material('Wood'), uids.material('Wood'),
+      uids.material('Wood'), uids.material('Wood'),
+    ];
+    const poolWoodCards = [
+      uids.material('Wood'), uids.material('Wood'), uids.material('Wood'),
+      uids.material('Wood'), uids.material('Wood'),
+    ];
+
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { hand: revealCards, influence: 3 });
+    s = updatePlayer(s, 1, { hand: defenderWoodCards, buildings, influence: buildings.length > 0 ? 3 : 0 });
+    const actorCount = opts.actorActions ?? 5;
+    const actors = Array(actorCount).fill(0);
+    s = { ...s, pool: poolWoodCards };
+    s = withActionPhase(s, 'Legionary', actors);
+    return s;
+  }
+
+  it('without Palisade, all demands go through', () => {
+    let s = setupLegionaryWithPalisade({});
+    // 1st demand
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    // Should enter demand phase (not blocked)
+    expect(s.phase.type).toBe('legionary_demand');
+  });
+
+  it('with Palisade, 1st demand is blocked, 2nd goes through', () => {
+    let s = setupLegionaryWithPalisade({ palisade: true });
+
+    // 1st demand — blocked by Palisade
+    const card1 = s.players[0]!.hand[0]!;
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: card1.uid });
+    // Should advance actor (demand blocked, no legionary_demand phase)
+    expect(s.phase.type).toBe('action');
+
+    // 2nd demand — goes through
+    const card2 = s.players[0]!.hand[0]!;
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: card2.uid });
+    expect(s.phase.type).toBe('legionary_demand');
+  });
+
+  it('with Palisade, 3rd demand is blocked, 4th goes through', () => {
+    let s = setupLegionaryWithPalisade({ palisade: true });
+
+    // 1st — blocked
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+
+    // 2nd — through
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('legionary_demand');
+    // Give the demanded card
+    s = gameReducer(s, { type: 'LEGIONARY_GIVE', cardUid: s.players[1]!.hand[0]!.uid });
+
+    // 3rd — blocked
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+
+    // 4th — through
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('legionary_demand');
+  });
+
+  it('with Palisade + Wall, only every 4th demand goes through', () => {
+    let s = setupLegionaryWithPalisade({ palisade: true, wall: true });
+
+    // 1st, 2nd, 3rd — all blocked
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+
+    // 4th — goes through
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('legionary_demand');
+  });
+
+  it('demand counts reset each round', () => {
+    let s = setupLegionaryWithPalisade({ palisade: true, actorActions: 2 });
+
+    // Round 1: 1st blocked, 2nd through
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('action');
+    s = gameReducer(s, { type: 'LEGIONARY_REVEAL', cardUid: s.players[0]!.hand[0]!.uid });
+    expect(s.phase.type).toBe('legionary_demand');
+    s = gameReducer(s, { type: 'LEGIONARY_GIVE', cardUid: s.players[1]!.hand[0]!.uid });
+    // Round should advance to next leader
+    expect(s.phase.type).toBe('lead');
+    // Demand counts should be reset
+    expect(s.legionaryDemandCounts).toBeUndefined();
+  });
+});
+
+describe('Archway power (incomplete Marble buildings provide function)', () => {
+  it('hasActiveBuildingPower returns true for completed buildings (non-Marble)', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [crossBuilding], influence: 1 });
+    expect(hasActiveBuildingPower(s.players[0]!, 'cross')).toBe(true);
+  });
+
+  it('hasActiveBuildingPower returns false for incomplete non-Marble buildings even with Archway', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
+    const crossBuilding = mkBuilding(uids.card('cross'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [archwayBuilding, crossBuilding], influence: 1 });
+    expect(hasActiveBuildingPower(s.players[0]!, 'cross')).toBe(false);
+  });
+
+  it('hasActiveBuildingPower activates first incomplete Marble building with Archway', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
+    const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble')], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [archwayBuilding, templeBuilding], influence: 1 });
+    expect(hasActiveBuildingPower(s.players[0]!, 'temple')).toBe(true);
+  });
+
+  it('hasActiveBuildingPower does not activate without Archway', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble')], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [templeBuilding] });
+    expect(hasActiveBuildingPower(s.players[0]!, 'temple')).toBe(false);
+  });
+
+  it('hasActiveBuildingPower only activates the first incomplete Marble building', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
+    const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble')], false);
+    const palaceBuilding = mkBuilding(uids.card('palace'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [archwayBuilding, templeBuilding, palaceBuilding], influence: 1 });
+    // Temple is first incomplete Marble — it's active
+    expect(hasActiveBuildingPower(s.players[0]!, 'temple')).toBe(true);
+    // Palace is second — not active
+    expect(hasActiveBuildingPower(s.players[0]!, 'palace')).toBe(false);
+  });
+
+  it('hasActiveBuildingPower skips completed Marble buildings when finding first incomplete', () => {
+    const { state, uids } = makeState(2, ['A', 'B'], 42);
+    const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
+    const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble'), uids.material('Marble'), uids.material('Marble')], true);
+    const palaceBuilding = mkBuilding(uids.card('palace'), [], false);
+    let s = finalize(state, uids);
+    s = updatePlayer(s, 0, { buildings: [archwayBuilding, templeBuilding, palaceBuilding], influence: 4 });
+    // Temple is completed (active regardless of Archway)
+    expect(hasActiveBuildingPower(s.players[0]!, 'temple')).toBe(true);
+    // Palace is the first *incomplete* Marble — Archway activates it
+    expect(hasActiveBuildingPower(s.players[0]!, 'palace')).toBe(true);
   });
 });

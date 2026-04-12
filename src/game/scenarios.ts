@@ -580,6 +580,153 @@ export function nearDiversityEnd(): Scenario {
   };
 }
 
+/** Cross power — +1 refresh hand size */
+export function crossPower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const crossBuilding = mkBuilding(uids.card('cross'), [uids.card('dock')], true);
+  return {
+    name: 'Cross power (+1 hand size)',
+    description: 'Player 0 has completed Cross — refresh draws to 6 instead of 5',
+    state: {
+      ...finalize(state, uids),
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, buildings: [crossBuilding], influence: 1, hand: p.hand.slice(0, 3) };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    },
+  };
+}
+
+/** Market power — on completion, take 1 of each material from Generic Supply */
+export function marketPower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const woodCard = uids.card('crane');
+  const marketBuilding = mkBuilding(uids.card('market'), [], false);
+  return {
+    name: 'Market power (complete it)',
+    description: 'Player 0 has Market nearly complete — finish it to see generic supply materials added to hand',
+    state: withActionPhase({
+      ...finalize(state, uids),
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, buildings: [marketBuilding], hand: [woodCard, ...p.hand.slice(0, 4)] };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    }, 'Craftsman'),
+  };
+}
+
+/** Dock power — Laborer: put 1 card from hand to stockpile */
+export function dockPower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const dockBuilding = mkBuilding(uids.card('dock'), [uids.card('crane')], true);
+  return {
+    name: 'Dock power (Laborer)',
+    description: 'Player 0 has completed Dock — can move hand cards to stockpile during Laborer',
+    state: withActionPhase({
+      ...finalize(state, uids),
+      pool: [uids.material('Wood'), uids.material('Brick')],
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, buildings: [dockBuilding], influence: 1 };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    }, 'Laborer'),
+  };
+}
+
+/** Bazaar power — Merchant: move pool material to vault */
+export function bazaarPower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const bazaarBuilding = mkBuilding(uids.card('bazaar'), [uids.card('market')], true);
+  return {
+    name: 'Bazaar power (Merchant)',
+    description: 'Player 0 has completed Bazaar — can vault materials directly from pool',
+    state: withActionPhase({
+      ...finalize(state, uids),
+      pool: [uids.material('Stone'), uids.material('Marble'), uids.material('Brick')],
+      players: state.players.map((p, i) => {
+        if (i === 0) return {
+          ...p,
+          buildings: [bazaarBuilding],
+          stockpile: [uids.material('Wood')],
+          influence: 1,
+        };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    }, 'Merchant'),
+  };
+}
+
+/** Crane power — Architect: start 2 buildings from hand */
+export function cranePower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const craneBuilding = mkBuilding(uids.card('crane'), [uids.card('dock')], true);
+  const brickCard = uids.card('foundry');
+  const stoneCard = uids.card('villa');
+  const concreteCard = uids.card('road');
+  return {
+    name: 'Crane power (Architect)',
+    description: 'Player 0 has completed Crane — select a card then click "Crane" to start 2 buildings',
+    state: withActionPhase({
+      ...finalize(state, uids),
+      players: state.players.map((p, i) => {
+        if (i === 0) return {
+          ...p,
+          buildings: [craneBuilding],
+          hand: [brickCard, stoneCard, concreteCard, ...p.hand.slice(0, 2)],
+          influence: 1,
+        };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    }, 'Architect'),
+  };
+}
+
+/** Archway power — first incomplete Marble building provides its function */
+export function archwayPower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const archwayBuilding = mkBuilding(uids.card('archway'), [uids.card('dock')], true);
+  const templeBuilding = mkBuilding(uids.card('temple'), [uids.material('Marble')], false);
+  return {
+    name: 'Archway power',
+    description: 'Player 0 has Archway + incomplete Temple — Temple power activates via Archway (will work when Marble powers are implemented)',
+    state: {
+      ...finalize(state, uids),
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, buildings: [archwayBuilding, templeBuilding], influence: 1, hand: p.hand.slice(0, 3) };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1, Marble: state.sites.Marble - 1 },
+    },
+  };
+}
+
+/** Palisade power — blocks odd-numbered legionary demands */
+export function palisadePower(): Scenario {
+  let { state, uids } = makeState(2, ['Alice', 'Bob'], 42);
+  const palisadeBuilding = mkBuilding(uids.card('palisade'), [uids.card('market')], true);
+  const woodCards = [uids.material('Wood'), uids.material('Wood'), uids.material('Wood')];
+  const defenderCards = [uids.material('Wood'), uids.material('Wood'), uids.material('Wood')];
+  return {
+    name: 'Palisade power (Legionary)',
+    description: 'Player 1 has Palisade — 1st, 3rd, 5th legionary demands from each player are blocked',
+    state: withActionPhase({
+      ...finalize(state, uids),
+      pool: [uids.material('Wood'), uids.material('Wood')],
+      players: state.players.map((p, i) => {
+        if (i === 0) return { ...p, hand: woodCards };
+        if (i === 1) return { ...p, buildings: [palisadeBuilding], hand: defenderCards, influence: 1 };
+        return p;
+      }),
+      sites: { ...state.sites, Wood: state.sites.Wood - 1 },
+    }, 'Legionary', [0, 0, 0]),
+  };
+}
+
 export const SCENARIOS: Scenario[] = [
   freshGame(),
   architectAction(),
@@ -598,4 +745,11 @@ export const SCENARIOS: Scenario[] = [
   nearDiversityEnd(),
   statuePower(),
   gameOver(),
+  crossPower(),
+  marketPower(),
+  dockPower(),
+  bazaarPower(),
+  cranePower(),
+  palisadePower(),
+  archwayPower(),
 ];

@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "Running typecheck..."
+npm run typecheck

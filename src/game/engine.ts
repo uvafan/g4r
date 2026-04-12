@@ -2,7 +2,7 @@ import {
   GameState, GameAction, Player, Phase, Sites, Building,
   Card, MaterialType, ActiveRole, GenericSupply, ThinkOption,
 } from './types';
-import { createDeck, getCardDef, MATERIAL_VALUE, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
+import { createDeck, getCardDef, CARD_DEF_MAP, MATERIAL_VALUE, RNG, ROLE_TO_MATERIAL, genericDefIdForMaterial, isJackCard } from './cards';
 
 const DEFAULT_HAND_LIMIT = 5;
 const SITES_PER_PLAYER = 1; // +1 is added below
@@ -82,10 +82,18 @@ export function createInitialState(
   };
 }
 
+export function getEffectiveHandLimit(state: GameState, playerId: number): number {
+  let limit = state.handLimit;
+  const player = state.players[playerId]!;
+  if (hasCompletedBuilding(player, 'cross')) limit += 1;
+  return limit;
+}
+
 function drawCards(state: GameState, playerId: number): GameState {
   const player = state.players[playerId]!;
-  const count = player.hand.length < state.handLimit
-    ? state.handLimit - player.hand.length
+  const handLimit = getEffectiveHandLimit(state, playerId);
+  const count = player.hand.length < handLimit
+    ? handLimit - player.hand.length
     : 1;
   const actualCount = Math.min(count, state.deck.length);
   const drawn = state.deck.slice(0, actualCount);
@@ -218,6 +226,7 @@ function advanceLeader(state: GameState): GameState {
     ...state,
     pool: [...state.pool, ...state.pendingPool],
     pendingPool: [],
+    legionaryDemandCounts: undefined, // Reset per-round legionary tracking
   };
   if (merged.deck.length === 0 || merged.gameEndTriggered) {
     return { ...merged, phase: { type: 'gameOver' } };
@@ -273,6 +282,22 @@ export function getNeighborIds(playerId: number, playerCount: number): number[] 
   const right = (playerId + 1) % playerCount;
   if (left === right) return [left]; // 2-player: same neighbor
   return [left, right];
+}
+
+/** Count how many legionary-blocking buildings (Palisade, Wall) a player has completed */
+function countLegionaryBlockers(player: Player): number {
+  let count = 0;
+  if (hasCompletedBuilding(player, 'palisade')) count++;
+  if (hasCompletedBuilding(player, 'wall')) count++;
+  return count;
+}
+
+/** Check if a legionary demand is blocked by Palisade/Wall.
+ *  With N blockers, only every 2^N-th demand from a given attacker gets through. */
+function isLegionaryDemandBlocked(demandCount: number, blockers: number): boolean {
+  if (blockers === 0) return false;
+  const interval = 1 << blockers; // 2^N
+  return (demandCount % interval) !== 0;
 }
 
 function hasAnySiteForMaterial(material: MaterialType, sites: Sites, outOfTownSites: Sites): boolean {
@@ -347,12 +372,40 @@ function completeBuildingIfReady(state: GameState, playerId: number, buildingInd
     influence: player.influence + def.cost,
   });
 
+  // Market: on completion, take 1 of each material type from Generic Supply into hand
+  if (def.id === 'market') {
+    newState = applyMarketCompletion(newState, playerId);
+  }
+
   // Check building diversity game end condition
   if (checkBuildingDiversityEnd(newState.players[playerId]!)) {
     newState = { ...newState, gameEndTriggered: true };
   }
 
   return newState;
+}
+
+function applyMarketCompletion(state: GameState, playerId: number): GameState {
+  const ALL_MATS: MaterialType[] = ['Rubble', 'Wood', 'Brick', 'Concrete', 'Stone', 'Marble'];
+  const newCards: Card[] = [];
+  let newSupply = { ...state.genericSupply };
+  let nextUid = state.nextUid;
+
+  for (const mat of ALL_MATS) {
+    if (newSupply[mat] > 0) {
+      newCards.push({ uid: nextUid++, defId: genericDefIdForMaterial(mat) });
+      newSupply[mat] = newSupply[mat] - 1;
+    }
+  }
+
+  const player = state.players[playerId]!;
+  return {
+    ...updatePlayer(state, playerId, {
+      hand: [...player.hand, ...newCards],
+    }),
+    genericSupply: newSupply,
+    nextUid,
+  };
 }
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
@@ -558,6 +611,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Determine if this must use an out-of-town site
       const isOutOfTown = requiresOutOfTownSite(cardDef.material, state.sites);
 
+      // Crane cannot be used with out-of-town buildings
+      if (isOutOfTown && action.craneCardUid !== undefined) return state;
+
       // Out-of-town requires 2 actions — validate the player has enough remaining
       if (isOutOfTown) {
         const remaining = countRemainingActions(actorId, phase.actors, phase.currentActorIndex);
@@ -598,6 +654,29 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Check auto-complete for cost-1 buildings
       const buildingIdx = newState.players[actorId]!.buildings.length - 1;
       newState = completeBuildingIfReady(newState, actorId, buildingIdx);
+
+      // Crane: start a second building from hand as part of the same action (normal sites only)
+      if (action.craneCardUid !== undefined) {
+        const cranePlayer = newState.players[actorId]!;
+        if (!hasCompletedBuilding(cranePlayer, 'crane')) return state;
+        const { card: craneCard, newHand: craneHand } = removeCardFromHand(cranePlayer, action.craneCardUid);
+        const craneDef = getCardDef(craneCard);
+        // Crane only allows normal sites, not out-of-town
+        if (newState.sites[craneDef.material] <= 0) return state;
+        if (!canStartBuildingOfMaterial(cranePlayer, craneDef.material, newState.sites, newState.outOfTownSites)) return state;
+        const craneBuilding: Building = {
+          foundationCard: craneCard,
+          materials: [],
+          completed: false,
+        };
+        newState = updatePlayer(newState, actorId, {
+          hand: craneHand,
+          buildings: [...newState.players[actorId]!.buildings, craneBuilding],
+        });
+        newState = { ...newState, sites: { ...newState.sites, [craneDef.material]: newState.sites[craneDef.material] - 1 } };
+        const craneBuildingIdx = newState.players[actorId]!.buildings.length - 1;
+        newState = completeBuildingIfReady(newState, actorId, craneBuildingIdx);
+      }
 
       // Out-of-town costs 2 actions, normal costs 1
       return advanceActor(newState, phase, isOutOfTown ? 2 : 1);
@@ -662,6 +741,27 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return advanceActor(newState, phase);
     }
 
+    case 'LABORER_HAND_TO_STOCKPILE': {
+      const { phase } = state;
+      if (phase.type !== 'action' || phase.ledRole !== 'Laborer') return state;
+
+      const actorId = phase.actors[phase.currentActorIndex]!;
+      const player = state.players[actorId]!;
+
+      // Requires completed Dock
+      if (!hasCompletedBuilding(player, 'dock')) return state;
+
+      const { card, newHand } = removeCardFromHand(player, action.cardUid);
+      if (isJackCard(card)) return state; // Jacks can't be used as materials
+
+      const newState = updatePlayer(state, actorId, {
+        hand: newHand,
+        stockpile: [...player.stockpile, card],
+      });
+
+      return advanceActor(newState, phase);
+    }
+
     case 'LABORER_STOCKPILE_TO_BUILDING': {
       const { phase } = state;
       if (phase.type !== 'action' || phase.ledRole !== 'Laborer') return state;
@@ -709,6 +809,22 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // Vault capacity is limited by influence
       if (player.vault.length >= player.influence) return state;
 
+      // Bazaar: move from pool to vault
+      if (action.fromPool) {
+        if (!hasCompletedBuilding(player, 'bazaar')) return state;
+        const poolIdx = state.pool.findIndex(c => getCardDef(c).material === action.material);
+        if (poolIdx === -1) return state;
+        const poolCard = state.pool[poolIdx]!;
+        const newPool = [...state.pool.slice(0, poolIdx), ...state.pool.slice(poolIdx + 1)];
+        const newState = {
+          ...updatePlayer(state, actorId, {
+            vault: [...player.vault, poolCard],
+          }),
+          pool: newPool,
+        };
+        return advanceActor(newState, phase);
+      }
+
       const stockpileIdx = player.stockpile.findIndex(
         c => getCardDef(c).material === action.material
       );
@@ -753,15 +869,29 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         });
       }
 
-      // Find neighbors who have matching material in hand
+      // Find neighbors who have matching material in hand, filtering out blocked demands
       const neighbors = getNeighborIds(actorId, state.playerCount);
-      const demandees = neighbors.filter(nId => {
+      const counts = { ...(newState.legionaryDemandCounts ?? {}) };
+      const demandees: number[] = [];
+
+      for (const nId of neighbors) {
         const neighbor = newState.players[nId]!;
-        return neighbor.hand.some(c => !isJackCard(c) && getCardDef(c).material === revealedMaterial);
-      });
+        const hasMatching = neighbor.hand.some(c => !isJackCard(c) && getCardDef(c).material === revealedMaterial);
+        if (!hasMatching) continue;
+
+        // Track demand count and check Palisade/Wall blocking
+        const key = `${actorId}-${nId}`;
+        counts[key] = (counts[key] ?? 0) + 1;
+        const blockers = countLegionaryBlockers(neighbor);
+        if (isLegionaryDemandBlocked(counts[key]!, blockers)) continue;
+
+        demandees.push(nId);
+      }
+
+      newState = { ...newState, legionaryDemandCounts: counts };
 
       if (demandees.length === 0) {
-        // No neighbors to demand from, advance actor
+        // No neighbors to demand from (or all blocked), advance actor
         return advanceActor(newState, phase);
       }
 
@@ -885,10 +1015,13 @@ export interface AvailableActions {
   leadOptions: { role: ActiveRole; cardUid: number; extraCardUids?: number[] }[];
   followOptions: { cardUid: number; extraCardUids?: number[] }[];
   architectOptions: { cardUid: number; outOfTown?: boolean }[];
+  architectCraneOptions: { cardUid: number; craneCardUid: number }[];
   craftsmanOptions: { buildingIndex: number; cardUid: number }[];
   laborerPoolOptions: MaterialType[];
+  laborerHandOptions: { cardUid: number }[];
   laborerBuildingOptions: { material: MaterialType; buildingIndex: number }[];
   merchantOptions: MaterialType[];
+  bazaarOptions: MaterialType[];
   vaultFull: boolean;
   patronOptions: MaterialType[];
   legionaryOptions: { cardUid: number }[];
@@ -904,10 +1037,13 @@ export function getAvailableActions(state: GameState): AvailableActions {
     leadOptions: [],
     followOptions: [],
     architectOptions: [],
+    architectCraneOptions: [],
     craftsmanOptions: [],
     laborerPoolOptions: [],
+    laborerHandOptions: [],
     laborerBuildingOptions: [],
     merchantOptions: [],
+    bazaarOptions: [],
     vaultFull: false,
     patronOptions: [],
     legionaryOptions: [],
@@ -923,9 +1059,10 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
   if (phase.type === 'lead' || phase.type === 'follow' || phase.type === 'thinkRound') {
     result.canThink = true;
+    const effectiveHandLimit = getEffectiveHandLimit(state, activeId);
     const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
     result.thinkOptions = {
-      canRefresh: player.hand.length < state.handLimit && state.deck.length > 0,
+      canRefresh: player.hand.length < effectiveHandLimit && state.deck.length > 0,
       canDraw1: state.deck.length > 0,
       genericMaterials,
       canDrawJack: state.jackPile > 0,
@@ -1018,6 +1155,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
     if (phase.ledRole === 'Architect') {
       const remaining = countRemainingActions(activeId, phase.actors, phase.currentActorIndex);
+      const hasCrane = hasCompletedBuilding(player, 'crane');
       for (const card of player.hand) {
         if (isJackCard(card)) continue; // Jacks can't be used as buildings
         const def = getCardDef(card);
@@ -1026,6 +1164,29 @@ export function getAvailableActions(state: GameState): AvailableActions {
         // Out-of-town requires 2 remaining actions
         if (outOfTown && remaining < 2) continue;
         result.architectOptions.push({ cardUid: card.uid, outOfTown: outOfTown || undefined });
+      }
+
+      // Crane: start 2 normal (non-out-of-town) buildings as one action
+      if (hasCrane) {
+        const normalOptions = result.architectOptions.filter(o => !o.outOfTown);
+        for (let i = 0; i < normalOptions.length; i++) {
+          for (let j = i + 1; j < normalOptions.length; j++) {
+            const a = normalOptions[i]!;
+            const b = normalOptions[j]!;
+            // Can't start 2 buildings of same material (second would be blocked)
+            const aDef = getCardDef(player.hand.find(c => c.uid === a.cardUid)!);
+            const bDef = getCardDef(player.hand.find(c => c.uid === b.cardUid)!);
+            if (aDef.material === bDef.material) continue;
+            result.architectCraneOptions.push({
+              cardUid: a.cardUid,
+              craneCardUid: b.cardUid,
+            });
+            result.architectCraneOptions.push({
+              cardUid: b.cardUid,
+              craneCardUid: a.cardUid,
+            });
+          }
+        }
       }
     }
 
@@ -1051,6 +1212,15 @@ export function getAvailableActions(state: GameState): AvailableActions {
         poolMaterialSet.add(getCardDef(card).material);
       }
       result.laborerPoolOptions = [...poolMaterialSet];
+
+      // Dock: hand to stockpile option
+      if (hasCompletedBuilding(player, 'dock')) {
+        for (const card of player.hand) {
+          if (!isJackCard(card)) {
+            result.laborerHandOptions.push({ cardUid: card.uid });
+          }
+        }
+      }
 
       // Stockpile to building options
       const stockpileMaterialSet = new Set<MaterialType>();
@@ -1080,6 +1250,15 @@ export function getAvailableActions(state: GameState): AvailableActions {
           stockpileMaterialSet.add(getCardDef(card).material);
         }
         result.merchantOptions = [...stockpileMaterialSet];
+
+        // Bazaar: pool to vault
+        if (hasCompletedBuilding(player, 'bazaar')) {
+          const poolMaterialSet = new Set<MaterialType>();
+          for (const card of state.pool) {
+            poolMaterialSet.add(getCardDef(card).material);
+          }
+          result.bazaarOptions = [...poolMaterialSet];
+        }
       }
     }
 
@@ -1140,6 +1319,30 @@ function hasCompletedBuilding(player: Player, buildingId: string): boolean {
   return player.buildings.some(
     b => b.completed && getCardDef(b.foundationCard).id === buildingId
   );
+}
+
+/**
+ * Check if a building power is active for a player, accounting for Archway.
+ * Archway makes the first incomplete Marble building provide its function.
+ * For non-Marble buildings, this is the same as hasCompletedBuilding.
+ */
+export function hasActiveBuildingPower(player: Player, buildingId: string): boolean {
+  if (hasCompletedBuilding(player, buildingId)) return true;
+
+  // Check Archway: does this building definition have Marble material?
+  const def = CARD_DEF_MAP[buildingId];
+  if (!def || def.material !== 'Marble') return false;
+
+  // Player needs a completed Archway
+  if (!hasCompletedBuilding(player, 'archway')) return false;
+
+  // Find the first incomplete Marble building — that's the one Archway activates
+  const firstIncompleteMarble = player.buildings.find(
+    b => !b.completed && getCardDef(b.foundationCard).material === 'Marble'
+  );
+  if (!firstIncompleteMarble) return false;
+
+  return getCardDef(firstIncompleteMarble.foundationCard).id === buildingId;
 }
 
 export function calculateVP(state: GameState, playerId: number): VPBreakdown {

@@ -20,6 +20,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
   const [selectedCardUids, setSelectedCardUids] = useState<number[]>([]);
   const [selectedBuildingIndex, setSelectedBuildingIndex] = useState<number | null>(null);
   const [selectedPoolMaterials, setSelectedPoolMaterials] = useState<MaterialType[]>([]);
+  const [craneFirstCardUid, setCraneFirstCardUid] = useState<number | null>(null);
   const [showDevTools, setShowDevTools] = useState(false);
 
   const activePlayerId = getActivePlayerId(state);
@@ -44,6 +45,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
     setSelectedCardUids([]);
     setSelectedBuildingIndex(null);
     setSelectedPoolMaterials([]);
+    setCraneFirstCardUid(null);
   }, [state.phase, activePlayerId]);
 
   // Auto-select building when only one matches the selected card during Craftsman
@@ -75,7 +77,20 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
     } else if (phase.type === 'action' && phase.ledRole === 'Legionary') {
       for (const o of actions.legionaryOptions) cardUids.add(o.cardUid);
     } else if (phase.type === 'action' && phase.ledRole === 'Architect') {
-      for (const o of actions.architectOptions) cardUids.add(o.cardUid);
+      if (craneFirstCardUid !== null) {
+        // Crane step 2: highlight valid second cards
+        for (const o of actions.architectCraneOptions) {
+          if (o.cardUid === craneFirstCardUid) cardUids.add(o.craneCardUid);
+          if (o.craneCardUid === craneFirstCardUid) cardUids.add(o.cardUid);
+        }
+      } else {
+        for (const o of actions.architectOptions) cardUids.add(o.cardUid);
+        // Also highlight cards that can be crane first cards
+        for (const o of actions.architectCraneOptions) {
+          cardUids.add(o.cardUid);
+          cardUids.add(o.craneCardUid);
+        }
+      }
     } else if (phase.type === 'action' && phase.ledRole === 'Laborer') {
       for (const o of actions.laborerBuildingOptions) buildingIndices.add(o.buildingIndex);
     } else if (phase.type === 'action' && phase.ledRole === 'Craftsman') {
@@ -103,7 +118,7 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
     }
 
     return { highlightedCardUids: cardUids, highlightedBuildingIndices: buildingIndices };
-  }, [state, selectedCardUid, selectedBuildingIndex]);
+  }, [state, selectedCardUid, selectedBuildingIndex, craneFirstCardUid]);
 
   const handlePoolMaterialToggle = (material: MaterialType) => {
     setSelectedPoolMaterials(prev => {
@@ -179,39 +194,39 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
         </div>
       )}
 
-      {state.pool.length > 0 && (
-        <div className="pool-section">
-          <span className="pool-label">Pool ({state.pool.length})</span>
-          <div className="pool-cards">
-            {(() => {
-              const counts: Partial<Record<MaterialType, number>> = {};
-              let jackCount = 0;
-              for (const card of state.pool) {
-                if (isJackCard(card)) {
-                  jackCount++;
-                } else {
-                  const mat = getCardDef(card).material;
-                  counts[mat] = (counts[mat] ?? 0) + 1;
-                }
+      <div className="pool-section">
+        <span className="pool-label">Pool ({state.pool.length})</span>
+        <div className="pool-cards">
+          {state.pool.length === 0 ? (
+            <span style={{ color: '#888', fontStyle: 'italic' }}>Empty</span>
+          ) : (() => {
+            const counts: Partial<Record<MaterialType, number>> = {};
+            let jackCount = 0;
+            for (const card of state.pool) {
+              if (isJackCard(card)) {
+                jackCount++;
+              } else {
+                const mat = getCardDef(card).material;
+                counts[mat] = (counts[mat] ?? 0) + 1;
               }
-              return (
-                <>
-                  {jackCount > 0 && (
-                    <div key="jack" className="pool-chip" style={{ backgroundColor: '#222', color: '#fff' }}>
-                      {jackCount} Jack
-                    </div>
-                  )}
-                  {(Object.entries(counts) as [MaterialType, number][]).map(([mat, count]) => (
-                    <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
-                      {count} {mat}
-                    </div>
-                  ))}
-                </>
-              );
-            })()}
-          </div>
+            }
+            return (
+              <>
+                {jackCount > 0 && (
+                  <div key="jack" className="pool-chip" style={{ backgroundColor: '#222', color: '#fff' }}>
+                    {jackCount} Jack
+                  </div>
+                )}
+                {(Object.entries(counts) as [MaterialType, number][]).map(([mat, count]) => (
+                  <div key={mat} className="pool-chip" style={{ backgroundColor: MATERIAL_COLORS[mat] }}>
+                    {count} {mat}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
-      )}
+      </div>
 
       <div className="generic-supply-section">
         <span className="pool-label">Jack Pile</span>
@@ -275,6 +290,9 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
             selectedBuildingIndex={selectedBuildingIndex}
             selectedPoolMaterials={selectedPoolMaterials}
             onPoolMaterialToggle={handlePoolMaterialToggle}
+            craneFirstCardUid={craneFirstCardUid}
+            onCraneFirstCard={(uid) => { setCraneFirstCardUid(uid); setSelectedCardUids([]); }}
+            onCraneCancel={() => { setCraneFirstCardUid(null); setSelectedCardUids([]); }}
             dispatch={dispatch}
           />
         </div>

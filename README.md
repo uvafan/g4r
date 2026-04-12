@@ -78,3 +78,4 @@ src/
 
 - [Original Glory to Rome rules](https://www.glory-to-rome.com/Glory_to_Rome_rules.html)
 - [G4R modifications](https://docs.google.com/document/d/1F8PkozBXOsRGOEB1rD_SbB8cYdCmRA3Wmy9emnflM2s/edit?tab=t.0)
+- [Card powers](https://docs.google.com/spreadsheets/d/1GXH0efkuqe0QaIsO-5OLbfY2LNONvWtE7pNBB4wCdZA/edit)

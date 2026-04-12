@@ -10,6 +10,7 @@ A web implementation of Glory to Rome with modifications (Glory 4 Rome / G4R).
 ## Game Rules
 - Original rules: https://www.glory-to-rome.com/Glory_to_Rome_rules.html
 - G4R modifications: https://docs.google.com/document/d/1F8PkozBXOsRGOEB1rD_SbB8cYdCmRA3Wmy9emnflM2s/edit?tab=t.0
+- Card powers: https://docs.google.com/spreadsheets/d/1GXH0efkuqe0QaIsO-5OLbfY2LNONvWtE7pNBB4wCdZA/edit
 - See README.md for full implementation status (what's done vs not yet implemented)
 
 ## Architecture

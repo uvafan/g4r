@@ -78,6 +78,8 @@ export interface GameState {
   playerCount: number;
   leadPlayerIdx: number;
   gameEndTriggered?: boolean;
+  /** Per-round legionary demand counts: key "attackerId-targetId" → count */
+  legionaryDemandCounts?: Record<string, number>;
 }
 
 export type ThinkOption =
@@ -91,11 +93,12 @@ export type GameAction =
   | { type: 'LEAD_ROLE'; role: ActiveRole; cardUid: number; extraCardUids?: number[] }
   | { type: 'THINK'; option: ThinkOption }
   | { type: 'FOLLOW_ROLE'; cardUid: number; extraCardUids?: number[] }
-  | { type: 'ARCHITECT_START'; cardUid: number; outOfTown?: boolean }
+  | { type: 'ARCHITECT_START'; cardUid: number; outOfTown?: boolean; craneCardUid?: number; craneOutOfTown?: boolean }
   | { type: 'CRAFTSMAN_ADD'; buildingIndex: number; cardUid: number }
   | { type: 'LABORER_POOL_TO_STOCKPILE'; materials: MaterialType[] }
+  | { type: 'LABORER_HAND_TO_STOCKPILE'; cardUid: number }
   | { type: 'LABORER_STOCKPILE_TO_BUILDING'; material: MaterialType; buildingIndex: number }
-  | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType }
+  | { type: 'MERCHANT_STOCKPILE_TO_VAULT'; material: MaterialType; fromPool?: boolean }
   | { type: 'LEGIONARY_REVEAL'; cardUid: number }
   | { type: 'LEGIONARY_GIVE'; cardUid: number }
   | { type: 'PATRON_HIRE'; material: MaterialType }

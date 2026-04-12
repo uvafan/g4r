@@ -52,7 +52,7 @@ export const CARD_DEFS: CardDef[] = [
   { id: 'crane', name: 'Crane', material: 'Wood', cost: 1, role: 'Craftsman', power: 'As an Architect action, you may start two buildings from your hand.' },
   { id: 'dock', name: 'Dock', material: 'Wood', cost: 1, role: 'Craftsman', power: 'Whenever you take a Laborer action, you may put a single card into your Stockpile from your Hand, instead of 2 from the Pool.' },
   { id: 'palisade', name: 'Palisade', material: 'Wood', cost: 1, role: 'Craftsman', power: 'Block 1st, 3rd, 5th, ... Legionary actions from each player each turn.' },
-  { id: 'market', name: 'Market', material: 'Wood', cost: 1, role: 'Craftsman', power: 'Upon completion, you may take 1 material of each type from the Generic Supply, if available.' },
+  { id: 'market', name: 'Market', material: 'Wood', cost: 1, role: 'Craftsman', power: 'Upon completion, take 1 material of each type from the Generic Supply into your hand, if available.' },
   { id: 'archway', name: 'Archway', material: 'Wood', cost: 1, role: 'Craftsman', power: 'Your incomplete Marble buildings still provide their function (maximum one at a time).' },
   { id: 'bazaar', name: 'Bazaar', material: 'Wood', cost: 1, role: 'Craftsman', power: 'As a Merchant action, you may move a material from the Pool to your Vault.' },
   { id: 'cross', name: 'Cross', material: 'Wood', cost: 1, role: 'Craftsman', power: '+1 Refresh Hand Size' },

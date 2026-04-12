@@ -1,5 +1,5 @@
 import { GameState, GameAction, MaterialType, ActiveRole } from '../game/types';
-import { getAvailableActions, getActivePlayerId, countRemainingActions } from '../game/engine';
+import { getAvailableActions, getActivePlayerId, countRemainingActions, getEffectiveHandLimit } from '../game/engine';
 import { getCardDef, MATERIAL_COLORS, ROLE_TO_MATERIAL, isJackCard } from '../game/cards';
 
 interface ActionBarProps {
@@ -9,12 +9,15 @@ interface ActionBarProps {
   selectedBuildingIndex: number | null;
   selectedPoolMaterials: MaterialType[];
   onPoolMaterialToggle: (material: MaterialType) => void;
+  craneFirstCardUid: number | null;
+  onCraneFirstCard: (uid: number) => void;
+  onCraneCancel: () => void;
   dispatch: (action: GameAction) => void;
 }
 
 const ALL_ROLES: ActiveRole[] = ['Architect', 'Craftsman', 'Laborer', 'Legionary', 'Merchant', 'Patron'];
 
-export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBuildingIndex, selectedPoolMaterials, onPoolMaterialToggle, dispatch }: ActionBarProps) {
+export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBuildingIndex, selectedPoolMaterials, onPoolMaterialToggle, craneFirstCardUid, onCraneFirstCard, onCraneCancel, dispatch }: ActionBarProps) {
   const actions = getAvailableActions(state);
   const { phase } = state;
   const { thinkOptions } = actions;
@@ -77,7 +80,10 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
           <span className="think-label">Think:</span>
           {thinkOptions.canRefresh && (
             <button onClick={() => dispatch({ type: 'THINK', option: { kind: 'refresh' } })}>
-              Refresh to 5
+              Refresh to {(() => {
+                const pid = getActivePlayerId(state);
+                return pid !== null ? getEffectiveHandLimit(state, pid) : state.handLimit;
+              })()}
             </button>
           )}
           {thinkOptions.canDraw1 && (
@@ -165,20 +171,82 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
 
       {phase.type === 'action' && phase.ledRole === 'Architect' && (
         <>
-          {selectedIsArchitectValid ? (
-            <button onClick={() => dispatch({ type: 'ARCHITECT_START', cardUid: selectedCardUid!, outOfTown: selectedArchitectOption!.outOfTown })}>
-              Start Building{selectedArchitectOption!.outOfTown ? ' (Out of Town)' : ''}: {(() => {
-                const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
-                return card ? getCardDef(card).name : '?';
-              })()}
-            </button>
-          ) : (
-            <span className="action-hint">
-              {actions.architectOptions.length > 0
-                ? 'Select a card from hand to start as a building'
-                : 'No valid buildings to start'}
-            </span>
-          )}
+          {craneFirstCardUid !== null ? (() => {
+            // Crane step 2: first card locked in, waiting for second
+            const firstName = (() => { const c = state.players.flatMap(p => p.hand).find(c => c.uid === craneFirstCardUid); return c ? getCardDef(c).name : '?'; })();
+            // Check if selectedCardUid is a valid second crane card
+            const craneOption = selectedCardUid !== null
+              ? actions.architectCraneOptions.find(o =>
+                  o.cardUid === craneFirstCardUid && o.craneCardUid === selectedCardUid)
+                ?? actions.architectCraneOptions.find(o =>
+                  o.craneCardUid === craneFirstCardUid && o.cardUid === selectedCardUid)
+              : null;
+            return (
+              <>
+                {craneOption ? (
+                  <button onClick={() => {
+                    dispatch({
+                      type: 'ARCHITECT_START',
+                      cardUid: craneOption.cardUid,
+                      craneCardUid: craneOption.craneCardUid,
+                    });
+                    onCraneCancel();
+                  }}>
+                    Crane: Start {firstName} + {(() => {
+                      const secondUid = craneOption.cardUid === craneFirstCardUid ? craneOption.craneCardUid : craneOption.cardUid;
+                      const c = state.players.flatMap(p => p.hand).find(c => c.uid === secondUid);
+                      return c ? getCardDef(c).name : '?';
+                    })()}
+                  </button>
+                ) : (
+                  <span className="action-hint">
+                    Crane: {firstName} + ? — Select second card
+                  </span>
+                )}
+                {(() => {
+                  const firstArchOpt = actions.architectOptions.find(o => o.cardUid === craneFirstCardUid);
+                  return firstArchOpt ? (
+                    <button onClick={() => {
+                      dispatch({ type: 'ARCHITECT_START', cardUid: craneFirstCardUid!, outOfTown: firstArchOpt.outOfTown });
+                      onCraneCancel();
+                    }}>
+                      Start only {firstName}
+                    </button>
+                  ) : null;
+                })()}
+                <button onClick={onCraneCancel}>Cancel</button>
+              </>
+            );
+          })() : (() => {
+            const isCraneCandidate = selectedCardUid !== null && actions.architectCraneOptions.some(o =>
+              o.cardUid === selectedCardUid || o.craneCardUid === selectedCardUid
+            );
+            return (
+              <>
+                {isCraneCandidate ? (
+                  <button onClick={() => onCraneFirstCard(selectedCardUid!)}>
+                    Start Building: {(() => {
+                      const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                      return card ? getCardDef(card).name : '?';
+                    })()} (Crane — select 2nd next)
+                  </button>
+                ) : selectedIsArchitectValid ? (
+                  <button onClick={() => dispatch({ type: 'ARCHITECT_START', cardUid: selectedCardUid!, outOfTown: selectedArchitectOption!.outOfTown })}>
+                    Start Building{selectedArchitectOption!.outOfTown ? ' (Out of Town)' : ''}: {(() => {
+                      const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                      return card ? getCardDef(card).name : '?';
+                    })()}
+                  </button>
+                ) : (
+                  <span className="action-hint">
+                    {actions.architectOptions.length > 0 || actions.architectCraneOptions.length > 0
+                      ? 'Select a card from hand to start as a building'
+                      : 'No valid buildings to start'}
+                  </span>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
 
@@ -220,10 +288,28 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
                 </button>
               ))}
             </div>
-          ) : (
-            <span className="action-hint">
-              {actions.vaultFull ? 'Vault is full (limited by influence)' : 'No materials in stockpile to vault'}
-            </span>
+          ) : !actions.vaultFull && actions.bazaarOptions.length === 0 ? (
+            <span className="action-hint">No materials in stockpile to vault</span>
+          ) : actions.vaultFull ? (
+            <span className="action-hint">Vault is full (limited by influence)</span>
+          ) : null}
+          {actions.bazaarOptions.length > 0 && (
+            <div className="merchant-vault-select">
+              <span className="action-label">Bazaar — Move to Vault from Pool:</span>
+              {actions.bazaarOptions.map(mat => (
+                <button
+                  key={`bazaar-${mat}`}
+                  style={{ backgroundColor: MATERIAL_COLORS[mat] }}
+                  onClick={() => dispatch({
+                    type: 'MERCHANT_STOCKPILE_TO_VAULT',
+                    material: mat,
+                    fromPool: true,
+                  })}
+                >
+                  {mat}
+                </button>
+              ))}
+            </div>
           )}
         </>
       )}
@@ -294,6 +380,18 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
 
       {phase.type === 'action' && phase.ledRole === 'Laborer' && (
         <>
+          {actions.laborerHandOptions.length > 0 && (
+            selectedCardUid !== null && actions.laborerHandOptions.some(o => o.cardUid === selectedCardUid) ? (
+              <button onClick={() => dispatch({ type: 'LABORER_HAND_TO_STOCKPILE', cardUid: selectedCardUid })}>
+                Dock: Hand to Stockpile ({(() => {
+                  const card = state.players.flatMap(p => p.hand).find(c => c.uid === selectedCardUid);
+                  return card ? getCardDef(card).name : '?';
+                })()})
+              </button>
+            ) : (
+              <span className="action-hint">Dock: Select a card from hand to move to stockpile</span>
+            )
+          )}
           {actions.laborerPoolOptions.length > 0 && (
             <div className="laborer-pool-select">
               <span className="action-label">Take from Pool:</span>
@@ -340,7 +438,7 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
           ) : actions.laborerBuildingOptions.length > 0 ? (
             <span className="action-hint">Select an in-progress building to add stockpile material</span>
           ) : null}
-          {actions.laborerPoolOptions.length === 0 && actions.laborerBuildingOptions.length === 0 && (
+          {actions.laborerPoolOptions.length === 0 && actions.laborerBuildingOptions.length === 0 && actions.laborerHandOptions.length === 0 && (
             <span className="action-hint">No laborer actions available</span>
           )}
         </>
