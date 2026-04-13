@@ -50,7 +50,7 @@ npm run build      # Production build
 - **Card powers** -- All building powers mechanically active. Stairway shared-building power is partial (material can be added but shared power propagation not yet implemented).
 - **Multi-player over network**
 - **Rulebook**
-- **Improve UX** -- Examples: Circus usage discovery could be better
+- **Improve UX** -- Examples: Better handling of displaying cards that have been thought face down, Circus usage discovery could be better
 - **Add option to skip think**
 - **Interactive tutorial**
 - **Alternative game end conditions** -- For example, the old end condition of all normal sites being started.

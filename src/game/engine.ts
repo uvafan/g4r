@@ -139,10 +139,12 @@ function applyThinkOption(state: GameState, playerId: number, option: ThinkOptio
   switch (option.kind) {
     case 'refresh': {
       // Draw from deck up to hand limit (minimum 1 if already at/above limit)
+      // Pending think cards (deferred until end of round) still count toward hand size
       const player = state.players[playerId]!;
       const handLimit = getEffectiveHandLimit(state, playerId);
-      const count = player.hand.length < handLimit
-        ? handLimit - player.hand.length
+      const effectiveHandSize = player.hand.length + (state.pendingThinkCards?.[playerId]?.length ?? 0);
+      const count = effectiveHandSize < handLimit
+        ? handLimit - effectiveHandSize
         : 1;
       const actualCount = Math.min(count, state.deck.length);
       const drawn = state.deck.slice(0, actualCount);
@@ -855,7 +857,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[playerId]!, 'senate')) {
           const p = vomState.players[playerId]!;
           const handLimit = getEffectiveHandLimit(vomState, playerId);
-          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          const effectiveHandSize = p.hand.length + (vomState.pendingThinkCards?.[playerId]?.length ?? 0);
+          const count = effectiveHandSize < handLimit ? handLimit - effectiveHandSize : 1;
           let newState = setRoundStatus(vomState, playerId, { declaration: 'think', thinkOption: option });
           return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: playerId, senateDeferred: true };
         }
@@ -877,7 +880,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[followerId]!, 'senate')) {
           const p = vomState.players[followerId]!;
           const handLimit = getEffectiveHandLimit(vomState, followerId);
-          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          const effectiveHandSize = p.hand.length + (vomState.pendingThinkCards?.[followerId]?.length ?? 0);
+          const count = effectiveHandSize < handLimit ? handLimit - effectiveHandSize : 1;
           let newState = setRoundStatus(vomState, followerId, { declaration: 'think', thinkOption: option });
           return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: followerId, senateDeferred: true };
         }
@@ -897,7 +901,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (option.kind === 'refresh' && hasActiveBuildingPower(vomState.players[followerId]!, 'senate')) {
           const p = vomState.players[followerId]!;
           const handLimit = getEffectiveHandLimit(vomState, followerId);
-          const count = p.hand.length < handLimit ? handLimit - p.hand.length : 1;
+          const effectiveHandSize = p.hand.length + (vomState.pendingThinkCards?.[followerId]?.length ?? 0);
+          const count = effectiveHandSize < handLimit ? handLimit - effectiveHandSize : 1;
           let newState = setRoundStatus(vomState, followerId, { declaration: 'think', thinkOption: option });
           return { ...newState, senateDrawsRemaining: count, senateDrawPlayerId: followerId, senateDeferred: true };
         }
@@ -1621,12 +1626,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       }
 
       // Post-Patron triggers
+      // Bath fires first (immediate action), then Stage (think), then Bar (flip)
       const postPatronAbilities: PendingAbility[] = [];
       const updatedPlayer = newState.players[actorId]!;
 
-      // Stage: after Patron, may Think
-      if (hasCompletedBuilding(updatedPlayer, 'stage')) {
-        postPatronAbilities.push({ kind: 'stage' });
+      // Bath: after Patron, hired client acts (unless Patron) — fires first
+      if (hasCompletedBuilding(updatedPlayer, 'bath')) {
+        const hiredRole = MATERIAL_TO_ROLE[action.material] as ActiveRole;
+        if (hiredRole !== 'Patron') {
+          postPatronAbilities.push({ kind: 'bath', role: hiredRole });
+        }
       }
 
       // Bar: after Patron, may flip top of deck → clientele or pool
@@ -1634,12 +1643,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         postPatronAbilities.push({ kind: 'bar', revealedCard: null });
       }
 
-      // Bath: after Patron, hired client acts (unless Patron)
-      if (hasCompletedBuilding(updatedPlayer, 'bath')) {
-        const hiredRole = MATERIAL_TO_ROLE[action.material] as ActiveRole;
-        if (hiredRole !== 'Patron') {
-          postPatronAbilities.push({ kind: 'bath', role: hiredRole });
-        }
+      // Stage: after Patron, may Think
+      if (hasCompletedBuilding(updatedPlayer, 'stage')) {
+        postPatronAbilities.push({ kind: 'stage' });
       }
 
       if (postPatronAbilities.length > 0) {
@@ -1819,7 +1825,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       const actorId = phase.actors[phase.currentActorIndex]!;
 
       if (pending.kind === 'school') {
-        let newState = applyThinkOption(state, actorId, action.option);
+        let newState = applyThinkOption(state, actorId, action.option, true);
         const remaining = pending.remainingThinks - 1;
         if (remaining > 0) {
           // Replace the school ability with decremented count
@@ -1830,7 +1836,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       }
 
       if (pending.kind === 'stage') {
-        const newState = applyThinkOption(state, actorId, action.option);
+        const newState = applyThinkOption(state, actorId, action.option, true);
         return resolvePendingAbility(newState, 'stage');
       }
 
@@ -2210,9 +2216,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         if (remaining.length > 0) {
           return { ...state, phase: { ...phase, pendingAbilities: remaining } };
         }
+        const cleanedPhase = { ...phase, pendingAbilities: undefined };
         return advanceActor(
-          { ...state, phase: { ...phase, pendingAbilities: undefined } },
-          phase,
+          { ...state, phase: cleanedPhase },
+          cleanedPhase,
         );
       }
 
@@ -2338,6 +2345,7 @@ export interface AvailableActions {
   foundryHasHand: boolean;
   abilityThinkOptions: ThinkOptions;
   remainingAbilityThinks: number | null;
+  remainingAbilityCraftsman: number | null;
   abilityCraftsmanOptions: { buildingIndex: number; cardUid: number; fromPool?: boolean }[];
   abilityPatronOptions: MaterialType[];
   barCanFlip: boolean;
@@ -2493,6 +2501,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
     foundryHasHand: false,
     abilityThinkOptions: noThink,
     remainingAbilityThinks: null,
+    remainingAbilityCraftsman: null,
     abilityCraftsmanOptions: [],
     abilityPatronOptions: [],
     barCanFlip: false,
@@ -2575,9 +2584,10 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
     if (ability.kind === 'school' || ability.kind === 'stage' || ability.kind === 'academy') {
       const effectiveHandLimit = getEffectiveHandLimit(state, activeId);
+      const effectiveHandSize = player.hand.length + (state.pendingThinkCards?.[activeId]?.length ?? 0);
       const genericMaterials = Object.keys(state.genericSupply) as MaterialType[];
       result.abilityThinkOptions = {
-        canRefresh: player.hand.length < effectiveHandLimit && state.deck.length > 0,
+        canRefresh: effectiveHandSize < effectiveHandLimit && state.deck.length > 0,
         canDraw1: state.deck.length > 0,
         genericMaterials,
         canDrawJack: state.jackPile > 0,
@@ -2589,6 +2599,7 @@ export function getAvailableActions(state: GameState): AvailableActions {
 
     if (ability.kind === 'amphitheatre') {
       populateCraftsmanOptions(player, state, result.abilityCraftsmanOptions);
+      result.remainingAbilityCraftsman = ability.remainingActions;
     }
 
     if (ability.kind === 'aqueduct') {

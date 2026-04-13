@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { GameState, GameAction, MaterialType, ActiveRole } from '../game/types';
-import { getAvailableActions, getActivePlayerId, countRemainingActions, getEffectiveHandLimit } from '../game/engine';
+import { getAvailableActions, getActivePlayerId, countRemainingActions, getEffectiveHandLimit, getPendingThinkCardCount } from '../game/engine';
 import { getCardDef, MATERIAL_COLORS, ROLE_TO_MATERIAL, isJackCard } from '../game/cards';
 
 interface ActionBarProps {
@@ -94,7 +94,7 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
               Refresh (Draw {(() => {
                 const pid = getActivePlayerId(state);
                 const limit = pid !== null ? getEffectiveHandLimit(state, pid) : state.handLimit;
-                const currentSize = pid !== null ? state.players.find(p => p.id === pid)!.hand.length : 0;
+                const currentSize = pid !== null ? state.players.find(p => p.id === pid)!.hand.length + getPendingThinkCardCount(state, pid) : 0;
                 return Math.max(0, limit - currentSize);
               })()})
             </button>
@@ -707,7 +707,12 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
           </span>
           {actions.abilityThinkOptions.canRefresh && (
             <button onClick={() => dispatch({ type: 'ABILITY_THINK', option: { kind: 'refresh' } })}>
-              Refresh
+              Refresh (Draw {(() => {
+                const pid = getActivePlayerId(state);
+                const limit = pid !== null ? getEffectiveHandLimit(state, pid) : state.handLimit;
+                const currentSize = pid !== null ? state.players.find(p => p.id === pid)!.hand.length + getPendingThinkCardCount(state, pid) : 0;
+                return Math.max(0, limit - currentSize);
+              })()})
             </button>
           )}
           {actions.abilityThinkOptions.canDraw1 && (
@@ -738,7 +743,7 @@ export function ActionBar({ state, selectedCardUid, selectedCardUids, selectedBu
 
       {actions.pendingAbilityKind === 'amphitheatre' && (
         <>
-          <span className="action-label">Amphitheatre: Craftsman action —</span>
+          <span className="action-label">Amphitheatre: Craftsman action ({actions.remainingAbilityCraftsman} left) —</span>
           {selectedCardUid !== null && selectedBuildingIndex !== null &&
             actions.abilityCraftsmanOptions.some(o => o.cardUid === selectedCardUid && o.buildingIndex === selectedBuildingIndex && !o.fromPool) ? (
             <button onClick={() => dispatch({

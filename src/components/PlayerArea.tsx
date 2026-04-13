@@ -72,12 +72,26 @@ export function PlayerArea({ player, gameState, isActive, isLeader, selectedBuil
           }
         }
         if (pendingCards.length > 0) {
-          const descriptions = pendingCards.map(c => {
-            if (isJackCard(c)) return 'Jack';
-            if (isGenericCard(c)) return `Generic ${getCardDef(c).material}`;
-            return 'card';
-          });
-          parts.push(`+${descriptions.join(', +')} at round end`);
+          const segments: string[] = [];
+          let deckCount = 0;
+          let jackCount = 0;
+          const genericCounts: Record<string, number> = {};
+          for (const c of pendingCards) {
+            if (isJackCard(c)) {
+              jackCount++;
+            } else if (isGenericCard(c)) {
+              const mat = getCardDef(c).material;
+              genericCounts[mat] = (genericCounts[mat] || 0) + 1;
+            } else {
+              deckCount++;
+            }
+          }
+          if (deckCount > 0) segments.push(`+${deckCount} deck card${deckCount !== 1 ? 's' : ''}`);
+          if (jackCount > 0) segments.push(`+${jackCount} Jack${jackCount !== 1 ? 's' : ''}`);
+          for (const [mat, count] of Object.entries(genericCounts)) {
+            segments.push(`+${count} Generic ${mat}`);
+          }
+          parts.push(`${segments.join(', ')} at round end`);
         }
 
         return (
