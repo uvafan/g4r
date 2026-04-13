@@ -46,10 +46,10 @@ npm run build      # Production build
 
 ### Not Yet Implemented
 
-- **Implement thiking properly re: cards not going immediately to hand**
-- **Card powers** -- All building powers mechanically active. Stairway shared-building power is partial (material can be added but shared power propagation not yet implemented).
+- **Card powers** -- All building powers mechanically active. Stairway shared-building power is partial (material can be added but shared power propagation not yet implemented). 3-cost buildling powers haven't been tested by Eli.
+- **Actions log** that players can look back through (there is a non-working version implemented)
 - **Multi-player over network**
-- **Rulebook**
+- **Rulebook**i
 - **Improve UX** -- Examples: Better handling of displaying cards that have been thought face down, Circus usage discovery could be better
 - **Add option to skip think**
 - **Interactive tutorial**

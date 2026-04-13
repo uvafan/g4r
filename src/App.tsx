@@ -5,6 +5,11 @@ import { SCENARIOS } from './game/scenarios';
 import { SetupScreen } from './components/SetupScreen';
 import { GameBoard } from './components/GameBoard';
 
+export interface HistoryEntry {
+  state: GameState;  // state BEFORE action was applied
+  action: GameAction;
+}
+
 const STORAGE_KEY = 'g4r-game-state';
 const HISTORY_KEY = 'g4r-undo-history';
 
@@ -70,10 +75,17 @@ function loadState(): GameState {
   return defaultState;
 }
 
-function loadHistory(): GameState[] {
+function loadHistory(): HistoryEntry[] {
   try {
     const saved = localStorage.getItem(HISTORY_KEY);
-    if (saved) return (JSON.parse(saved) as GameState[]).map(migrateState);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Detect old format (GameState[]) vs new format (HistoryEntry[])
+      if (Array.isArray(parsed) && parsed.length > 0 && !('action' in parsed[0])) {
+        return []; // Old format, discard
+      }
+      return (parsed as HistoryEntry[]).map(e => ({ ...e, state: migrateState(e.state) }));
+    }
   } catch { /* ignore corrupt data */ }
   return [];
 }
@@ -94,15 +106,18 @@ declare global {
 
 export default function App() {
   const [state, setState] = useState(loadState);
-  const historyRef = useRef<GameState[]>(loadHistory());
+  const historyRef = useRef<HistoryEntry[]>(loadHistory());
+  // Counter to force re-renders when history changes without state change
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     localStorage.setItem(HISTORY_KEY, JSON.stringify(historyRef.current));
-  }, [state]);
+  }, [state, historyVersion]);
 
   const loadGameState = useCallback((newState: GameState) => {
     historyRef.current = [];
+    setHistoryVersion(v => v + 1);
     setState(migrateState(newState));
   }, []);
 
@@ -148,14 +163,25 @@ export default function App() {
       } else {
         next = gameReducer(prev, action);
       }
-      historyRef.current.push(prev);
+      historyRef.current.push({ state: prev, action });
       return next;
     });
   }, []);
 
   const undo = useCallback(() => {
-    const prev = historyRef.current.pop();
-    if (prev) setState(prev);
+    const entry = historyRef.current.pop();
+    if (entry) {
+      setHistoryVersion(v => v + 1);
+      setState(entry.state);
+    }
+  }, []);
+
+  const goToAction = useCallback((index: number) => {
+    if (index === historyRef.current.length - 1) return; // already at current state
+    const targetState = historyRef.current[index + 1]!.state;
+    historyRef.current = historyRef.current.slice(0, index + 1);
+    setHistoryVersion(v => v + 1);
+    setState(targetState);
   }, []);
 
   const newGame = useCallback(() => {
@@ -181,6 +207,8 @@ export default function App() {
       onUndo={historyRef.current.length > 0 ? undo : undefined}
       onNewGame={newGame}
       onLoadState={loadGameState}
+      history={historyRef.current}
+      onGoToAction={goToAction}
     />
   );
 }

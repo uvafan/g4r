@@ -7,6 +7,8 @@ import { PhaseIndicator } from './PhaseIndicator';
 import { PlayerArea } from './PlayerArea';
 import { HandView } from './HandView';
 import { ActionBar } from './ActionBar';
+import { ActionLog } from './ActionLog';
+import { HistoryEntry } from '../App';
 
 interface GameBoardProps {
   state: GameState;
@@ -14,14 +16,17 @@ interface GameBoardProps {
   onUndo?: () => void;
   onNewGame: () => void;
   onLoadState: (state: GameState) => void;
+  history: HistoryEntry[];
+  onGoToAction: (index: number) => void;
 }
 
-export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: GameBoardProps) {
+export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState, history, onGoToAction }: GameBoardProps) {
   const [selectedCardUids, setSelectedCardUids] = useState<number[]>([]);
   const [selectedBuildingIndex, setSelectedBuildingIndex] = useState<number | null>(null);
   const [selectedPoolMaterials, setSelectedPoolMaterials] = useState<MaterialType[]>([]);
   const [craneFirstCardUid, setCraneFirstCardUid] = useState<number | null>(null);
   const [showDevTools, setShowDevTools] = useState(false);
+  const [showLog, setShowLog] = useState(false);
 
   const activePlayerId = getActivePlayerId(state);
 
@@ -215,12 +220,16 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
   const activePlayer = activePlayerId !== null ? state.players[activePlayerId] : null;
 
   return (
+    <div className="game-board-layout">
     <div className="game-board">
       <div className="top-bar">
         <PhaseIndicator state={state} />
         <div className="top-bar-buttons">
           {onUndo && <button className="top-btn" onClick={onUndo}>Undo</button>}
           <button className="top-btn" onClick={onNewGame}>New Game</button>
+          <button className={`top-btn${showLog ? ' top-btn-active' : ''}`} onClick={() => setShowLog(v => !v)}>
+            Log
+          </button>
           <button className="top-btn" onClick={() => setShowDevTools(v => !v)}>
             {showDevTools ? 'Hide Dev' : 'Dev'}
           </button>
@@ -374,6 +383,13 @@ export function GameBoard({ state, dispatch, onUndo, onNewGame, onLoadState }: G
           />
         </div>
       )}
+    </div>
+    {showLog && (
+      <ActionLog
+        history={history}
+        onGoToAction={onGoToAction}
+      />
+    )}
     </div>
   );
 }
